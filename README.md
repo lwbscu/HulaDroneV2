@@ -3,7 +3,7 @@
 [![](https://tokei.rs/b1/github/NostalgiaJohn/HulaDroneControlApp-desktop?type=Python&label=Lines%20of%20Code&style=flat-square)](https://github.com/XAMPPRocky/tokei_rs)
 ![](https://img.shields.io/badge/Version-3.6-f1d247?logo=python&style=flat-square)
 
-![Hula Drone demo](.github/demo.gif)
+<img src=".github/demo.gif" alt="Hula Drone demo" width="100%">
 
 [Watch the full demo video](.github/demo.mp4)
 
