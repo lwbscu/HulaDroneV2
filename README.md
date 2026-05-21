@@ -3,25 +3,13 @@
 [![](https://tokei.rs/b1/github/NostalgiaJohn/HulaDroneControlApp-desktop?type=Python&label=Lines%20of%20Code&style=flat-square)](https://github.com/XAMPPRocky/tokei_rs)
 ![](https://img.shields.io/badge/Version-3.6-f1d247?logo=python&style=flat-square)
 
-<video src=".github/demo.mp4" controls autoplay muted loop playsinline width="100%"></video>
+![Hula Drone demo](.github/demo.gif)
 
-[Watch the demo video](.github/demo.mp4)
+[Watch the full demo video](.github/demo.mp4)
 
 The Hula Drone Control Desktop App is a comprehensive software suite for the command, control, and analysis of an autonomous drone. Developed as the final coursework for the 'Principle of Automatic Control' course at Sichuan University's College of Electrical Engineering, this app integrates advanced control strategies, computer vision, and a responsive graphical user interface (GUI) to achieve high-precision flight and target interaction.
 
 The core philosophy is to provide a robust platform for both manual operation and complex, automated missions through a modular, safe, and user-friendly design.
-
----
-
-## Key Features
-
-* **High-Precision Position Control**: Implements a multi-threaded PID control loop for centimeter-level hovering and accurate waypoint navigation.
-* **Intelligent Vision System**: Utilizes AprilTag markers for real-time target detection, pose estimation, and automated aiming functionalities.
-* **Real-time Situational Awareness**: Features a responsive GUI with live video streaming and 2D flight path plotting, offering the operator a complete view of the drone's status and environment.
-* **Asynchronous & Non-Blocking Architecture**: Employs a multi-threaded, event-driven design to ensure the GUI remains fluid and responsive at all times, even during computationally intensive tasks.
-* **Automated Flight Planner**: Capable of executing complex, multi-step flight plans with custom actions (e.g., rotation, aiming) at each waypoint.
-* **Robust Safety Protocols**: Includes a "progressive disclosure" UI, thorough pre-flight checks, and a graceful exit procedure that ensures the drone lands safely and all data is saved before shutdown.
-* **Flight Data Logging & Analysis**: Automatically records detailed telemetry during flight into JSON files and provides a plotting utility to visualize and analyze performance.
 
 ---
 
@@ -51,6 +39,16 @@ python plot.py
 ```
 
 ---
+
+## Key Features
+
+* **High-Precision Position Control**: Implements a multi-threaded PID control loop for centimeter-level hovering and accurate waypoint navigation.
+* **Intelligent Vision System**: Utilizes AprilTag markers for real-time target detection, pose estimation, and automated aiming functionalities.
+* **Real-time Situational Awareness**: Features a responsive GUI with live video streaming and 2D flight path plotting, offering the operator a complete view of the drone's status and environment.
+* **Asynchronous & Non-Blocking Architecture**: Employs a multi-threaded, event-driven design to ensure the GUI remains fluid and responsive at all times, even during computationally intensive tasks.
+* **Automated Flight Planner**: Capable of executing complex, multi-step flight plans with custom actions (e.g., rotation, aiming) at each waypoint.
+* **Robust Safety Protocols**: Includes a "progressive disclosure" UI, thorough pre-flight checks, and a graceful exit procedure that ensures the drone lands safely and all data is saved before shutdown.
+* **Flight Data Logging & Analysis**: Automatically records detailed telemetry during flight into JSON files and provides a plotting utility to visualize and analyze performance.
 
 ## System Architecture
 
