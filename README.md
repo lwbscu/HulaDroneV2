@@ -3,6 +3,10 @@
 [![](https://tokei.rs/b1/github/NostalgiaJohn/HulaDroneControlApp-desktop?type=Python&label=Lines%20of%20Code&style=flat-square)](https://github.com/XAMPPRocky/tokei_rs)
 ![](https://img.shields.io/badge/Version-3.6-f1d247?logo=python&style=flat-square)
 
+<video src=".github/demo.mp4" controls autoplay muted loop playsinline width="100%"></video>
+
+[Watch the demo video](.github/demo.mp4)
+
 The Hula Drone Control Desktop App is a comprehensive software suite for the command, control, and analysis of an autonomous drone. Developed as the final coursework for the 'Principle of Automatic Control' course at Sichuan University's College of Electrical Engineering, this app integrates advanced control strategies, computer vision, and a responsive graphical user interface (GUI) to achieve high-precision flight and target interaction.
 
 The core philosophy is to provide a robust platform for both manual operation and complex, automated missions through a modular, safe, and user-friendly design.
@@ -18,6 +22,33 @@ The core philosophy is to provide a robust platform for both manual operation an
 * **Automated Flight Planner**: Capable of executing complex, multi-step flight plans with custom actions (e.g., rotation, aiming) at each waypoint.
 * **Robust Safety Protocols**: Includes a "progressive disclosure" UI, thorough pre-flight checks, and a graceful exit procedure that ensures the drone lands safely and all data is saved before shutdown.
 * **Flight Data Logging & Analysis**: Automatically records detailed telemetry during flight into JSON files and provides a plotting utility to visualize and analyze performance.
+
+---
+
+## Usage
+
+### Preparing the Take-off Site
+
+Prepared AprilTag PDFs are included in [`tools/aprilTag/`](tools/aprilTag/) for building a repeatable take-off and aiming site. The folder provides `tag36h11_200mm_id000.pdf` through `tag36h11_200mm_id004.pdf`, which can be printed and fixed to the take-off board or site markers.
+
+Print the tags at 100% scale, keep them flat, and avoid glossy surfaces. The automated square-aim workflow can use corner-specific tag IDs when matching visible markers; if the expected corner tag is not visible, the detector falls back to the nearest detected AprilTag.
+
+### Running the Application
+
+To start the control app, run the frontend script:
+
+```bash
+python main-frontend.py
+```
+
+### Analyzing Flight Data
+
+After a flight, the `Controller.py` module saves a detailed log in the `flight_journals/` directory. You can visualize this data using `plot.py`.
+
+```bash
+# This will find the latest flight journal and generate plots
+python plot.py
+```
 
 ---
 
@@ -120,29 +151,6 @@ pip install -r requirements.txt
 
   * Ensure the camera calibration file `camera_calibration.npz` is in the root directory.
   * Ensure the `fonts` folder containing the PingFangSC fonts is present for proper UI rendering.
-
------
-
-## Usage
-
-### Running the Application
-
-To start the control app, run the frontend script:
-
-```bash
-python main-frontend.py
-```
-
-### Analyzing Flight Data
-
-After a flight, the `Controller.py` module saves a detailed log in the `flight_journals/` directory. You can visualize this data using `plot.py`.
-
-```bash
-# This will find the latest flight journal and generate plots
-python plot.py
-```
-
------
 
 ## Acknowledgements
 
