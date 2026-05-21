@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import os
-import math
 
 # AprilTag 的真实物理尺寸 (单位：米)
 # 确保这个尺寸和你打印的 AprilTag 的黑色边框边长一致
@@ -51,7 +50,31 @@ class TargetDetectorAruco:
 
         self.current_offset_yaw = 0.0
         self.current_offset_pitch = 0.0
+        self.preferred_tag_id = None
+        self.current_target_info = None
+        self.pitch_offset_degrees = -2.0
         self.laser_offset_vector = np.array([0.0, 0.07, 0.0], dtype=np.float32)
+
+    def set_preferred_tag_id(self, tag_id):
+        self.preferred_tag_id = None if tag_id is None else int(tag_id)
+
+    def clear_preferred_tag_id(self):
+        self.preferred_tag_id = None
+
+    def set_pitch_offset(self, offset_degrees):
+        self.pitch_offset_degrees = float(offset_degrees)
+
+    def _select_target_candidate(self, candidates):
+        if not candidates:
+            return None, "none"
+        if self.preferred_tag_id is not None:
+            matched_candidates = [
+                candidate for candidate in candidates
+                if candidate["id"] == self.preferred_tag_id
+            ]
+            if matched_candidates:
+                return min(matched_candidates, key=lambda c: c["distance"]), "matched"
+        return min(candidates, key=lambda c: c["distance"]), "nearest"
 
     def load_calibration_data(self):
         # 这个函数和你的原代码完全一样，直接复用
@@ -93,7 +116,7 @@ class TargetDetectorAruco:
             cv2.aruco.drawDetectedMarkers(display_frame, corners, ids)
             
             # 遍历所有检测到的标记
-            min_distance = math.inf
+            candidates = []
             for i, marker_id in enumerate(ids):
                 # 图像上的角点
                 image_points = corners[i]
@@ -146,17 +169,57 @@ class TargetDetectorAruco:
                     cv2.putText(display_frame, f"Pitch: {pitch_angle_deg:.2f} deg", (10, 185 + i*200),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2) # Orange color
 
-                    # 假定我们只关心第一个检测到的 Tag
-                    if distance < min_distance:
-                        min_distance = distance
-                        self.current_offset_yaw = yaw_angle_deg
-                        self.current_offset_pitch = pitch_angle_deg
+                    candidates.append({
+                        "id": int(marker_id[0]),
+                        "distance": float(distance),
+                        "yaw": float(yaw_angle_deg),
+                        "pitch": float(pitch_angle_deg),
+                        "translation": target_vector_from_camera.tolist(),
+                    })
+
+            selected_candidate, selected_reason = self._select_target_candidate(candidates)
+            if selected_candidate:
+                self.current_offset_yaw = selected_candidate["yaw"]
+                adjusted_pitch = selected_candidate["pitch"] + self.pitch_offset_degrees
+                self.current_offset_pitch = adjusted_pitch
+                self.current_target_info = {
+                    "detected": True,
+                    "selected_reason": selected_reason,
+                    "preferred_tag_id": self.preferred_tag_id,
+                    "raw_pitch": selected_candidate["pitch"],
+                    "pitch_offset": self.pitch_offset_degrees,
+                    **selected_candidate,
+                    "pitch": adjusted_pitch,
+                }
+                status_y = max(30, display_frame.shape[0] - 30)
+                cv2.putText(
+                    display_frame,
+                    f"Selected ID: {selected_candidate['id']} ({selected_reason}) PitchOff: {self.pitch_offset_degrees:+.1f}",
+                    (10, status_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2,
+                )
+            else:
+                self.current_offset_yaw = 0.0
+                self.current_offset_pitch = 0.0
+                self.current_target_info = {
+                    "detected": False,
+                    "selected_reason": "none",
+                    "preferred_tag_id": self.preferred_tag_id,
+                }
 
         else:
             cv2.putText(display_frame, "AprilTag Not Detected", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             self.current_offset_yaw = 0.0
             self.current_offset_pitch = 0.0
+            self.current_target_info = {
+                "detected": False,
+                "selected_reason": "none",
+                "preferred_tag_id": self.preferred_tag_id,
+            }
             
         return display_frame
 
