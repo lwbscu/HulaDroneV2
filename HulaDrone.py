@@ -39,6 +39,8 @@ class HulaDrone:
         self._cam_ready: bool = False
         self._aim_ready: bool = False # 激光瞄准状态
         self._pause_aim_event = threading.Event() # 用于控制激光瞄准的暂停（clear）和恢复（set）
+        self._aim_adjust_lock = threading.Lock()
+        self.aim_pitch_offset_degrees = -2.0
 
         self._status_callbacks = [] # 列表，用于存储注册的回调函数
 
@@ -293,6 +295,9 @@ class HulaDrone:
             print(self.status["message"])
             return
 
+        if int(rotate_degrees) == 0:
+            return
+
         if self.controller and self.controller.running:
             self.controller.pause() # 旋转时暂停PID位置控制，避免冲突
             self.status["message"] = "PID暂停以执行旋转"
@@ -380,6 +385,9 @@ class HulaDrone:
             self._notify_status_callbacks()
             return False
 
+        if int(angle) == 0:
+            return True
+
         if angle >= 0: # 相机俯仰角向上调整
             self.instance.Plane_cmd_camera_angle(3, angle)
             self.status["message"] = f"相机俯仰角向上调整 {angle}°"
@@ -415,6 +423,20 @@ class HulaDrone:
 
     def pause_aim_target(self):
         self._pause_aim_event.clear() # 暂停激光瞄准线程
+
+    def _wait_for_aim_adjustment_idle(self, timeout: float = 5.0) -> bool:
+        acquired = self._aim_adjust_lock.acquire(timeout=timeout)
+        if acquired:
+            self._aim_adjust_lock.release()
+        else:
+            print(f"等待瞄准调整空闲超时：{timeout}秒")
+        return acquired
+
+    def set_aim_pitch_offset(self, offset_degrees: float):
+        self.aim_pitch_offset_degrees = float(offset_degrees)
+        if self.target_detector:
+            self.target_detector.set_pitch_offset(self.aim_pitch_offset_degrees)
+        print(f"瞄准俯仰偏移已设置为 {self.aim_pitch_offset_degrees:+.1f}°")
 
     def square_flight(self, side_length: float, unit: str = "time", completion_callback=None, step_callback=None):
         """
@@ -500,29 +522,68 @@ class HulaDrone:
             unit (str): 'time' 表示时间单位(秒)，'distance' 表示距离单位(cm)
             completion_callback (callable, optional): 飞行完成后执行的回调函数
         """
+        def debug_log(message: str):
+            print(f"[square_aim_flight][{time.strftime('%H:%M:%S')}] {message}")
+
         def step_callback(reach_rotation_degree : int):
             '''飞机到达点位后，旋转reach_rotation_degree'''
+            debug_log(f"step rotation start: reach_rotation_degree={reach_rotation_degree}")
+            self.pause_aim_target()
+            debug_log("aim paused before step rotation")
+            debug_log("wait aim adjustment idle before step rotation start")
+            self._wait_for_aim_adjustment_idle()
+            debug_log("wait aim adjustment idle before step rotation end")
+            time.sleep(0.4)
             self.set_rotation(reach_rotation_degree)
-        def post_step_callback(aim_time : int, leave_rotation_degree : int):
+            debug_log(f"step rotation end: reach_rotation_degree={reach_rotation_degree}")
+        def post_step_callback(aim_time : int, leave_rotation_degree : int, preferred_tag_id = None):
             '''飞机完成step_callback后，开启激光，瞄准目标aim_time时间，关闭激光，再旋转leave_rotation_degree'''
+            debug_log(f"post step start: aim_time={aim_time}, leave_rotation_degree={leave_rotation_degree}, preferred_tag_id={preferred_tag_id}")
+            if self.target_detector:
+                self.target_detector.set_preferred_tag_id(preferred_tag_id)
+                debug_log(f"preferred tag set: {preferred_tag_id}")
             # 开启激光
+            debug_log("pre-laser delay start")
             time.sleep(1)
+            debug_log("pre-laser delay end")
             _tmp_heading = self.status["heading"] # 保存当前航向
+            debug_log(f"saved heading: {_tmp_heading}")
+            debug_log("laser on start")
             self.instance.plane_fly_generating(4, 10, 100)
+            debug_log("laser on end")
             self.status["message"] = "激光已开启"
             self._notify_status_callbacks()
             # 瞄准目标
+            debug_log("resume aim start")
             self.resume_aim_target()
+            debug_log("resume aim end")
+            debug_log(f"aim sleep start: {aim_time}s")
             time.sleep(aim_time)
+            debug_log("aim sleep end")
             # 停止瞄准
+            debug_log("pause aim start")
             self.pause_aim_target()
+            debug_log("pause aim end")
+            debug_log("wait aim adjustment idle after pause start")
+            self._wait_for_aim_adjustment_idle()
+            debug_log("wait aim adjustment idle after pause end")
+            if self.target_detector:
+                self.target_detector.clear_preferred_tag_id()
+                debug_log("preferred tag cleared")
             # 关闭激光
+            debug_log("laser off start")
             self.instance.plane_fly_generating(5, 0, 0)
+            debug_log("laser off end")
             self.status["message"] = "激光已关闭"
             self._notify_status_callbacks()
             # 旋转
+            debug_log(f"restore heading start: {_tmp_heading}")
             self.set_heading(_tmp_heading) # 恢复之前的航向
+            debug_log(f"restore heading end: {_tmp_heading}")
+            debug_log(f"leave rotation start: {leave_rotation_degree}")
             self.set_rotation(leave_rotation_degree)
+            debug_log(f"leave rotation end: {leave_rotation_degree}")
+            debug_log("post step end")
 
         def wrapped_completion_callback():
             """包装完成回调以添加四方飞行特定的消息"""
@@ -565,10 +626,10 @@ class HulaDrone:
         if target_pos_original and len(target_pos_original) == 3:
             x_original, y_original, z_original = target_pos_original
             # 计算四个目标位置
-            fly_plan.append((x_original - fly_dist/2, y_original - fly_dist/2, z_original, 45 , aim_time, -45)) # 第一个点，旋转45度，瞄准aim_time秒后，旋转-45度
-            fly_plan.append((x_original - fly_dist/2, y_original + fly_dist/2, z_original, 135, aim_time, -45)) # 第二个点，旋转135度，瞄准aim_time秒后，旋转-45度
-            fly_plan.append((x_original + fly_dist/2, y_original + fly_dist/2, z_original, 135, aim_time, -45)) # 第三个点，旋转135度，瞄准aim_time秒后，旋转-45度
-            fly_plan.append((x_original + fly_dist/2, y_original - fly_dist/2, z_original, 135, aim_time, -45)) # 第四个点，旋转135度，瞄准aim_time秒后，旋转-45度
+            fly_plan.append((x_original - fly_dist/2, y_original - fly_dist/2, z_original, 45 , aim_time, -45, 3)) # 第一个点，优先瞄准Tag 3
+            fly_plan.append((x_original - fly_dist/2, y_original + fly_dist/2, z_original, 135, aim_time, -45, 2)) # 第二个点，优先瞄准Tag 2
+            fly_plan.append((x_original + fly_dist/2, y_original + fly_dist/2, z_original, 135, aim_time, -45, 1)) # 第三个点，优先瞄准Tag 1
+            fly_plan.append((x_original + fly_dist/2, y_original - fly_dist/2, z_original, 135, aim_time, -45, 0)) # 第四个点，优先瞄准Tag 0
             fly_plan.append((x_original - fly_dist/2, y_original - fly_dist/2, z_original, 90))
             fly_plan.append((x_original, y_original, z_original, 0))# 回到起点
         else:
@@ -577,6 +638,11 @@ class HulaDrone:
             return
         
         try:
+            self.pause_aim_target()
+            debug_log("aim paused before square aim flight setup")
+            debug_log("wait aim adjustment idle before setup start")
+            self._wait_for_aim_adjustment_idle()
+            debug_log("wait aim adjustment idle before setup end")
             self.set_heading(0) # 设置航向为 0
             self.set_camera_absolute_pitch(-45) # 设置相机俯仰角为 -45, 斜向下方以看到靶子
             # 执行飞行计划
@@ -670,9 +736,10 @@ class HulaDrone:
                     print(f"步骤回调执行错误: {e}")
 
             # 如果存在后续步骤回调，执行它
-            if self._post_step_callback:
+            if self._post_step_callback and len(current_point) >= 6:
                 try:
-                    self._post_step_callback(current_point[4], current_point[5]) # 传递aim_time和leave_rotation_degree
+                    preferred_tag_id = current_point[6] if len(current_point) >= 7 else None
+                    self._post_step_callback(current_point[4], current_point[5], preferred_tag_id) # 传递aim_time、leave_rotation_degree和优先Tag
                 except Exception as e:
                     print(f"后续步骤回调执行错误: {e}")
             
@@ -734,8 +801,8 @@ class HulaDrone:
             self.controller.unregister_target_reached_callback(self._target_reached_callback)
             del self._target_reached_callback
         
-        for attr in ['_current_fly_plan', '_current_fly_plan_index', 
-                    '_fly_plan_completion_callback', '_fly_plan_step_callback']:
+        for attr in ['_current_fly_plan', '_current_fly_plan_index',
+                    '_fly_plan_completion_callback', '_fly_plan_step_callback', '_post_step_callback']:
             if hasattr(self, attr):
                 delattr(self, attr)
 
@@ -774,8 +841,17 @@ class HulaDrone:
             self._pause_aim_event.wait() # 等待激光瞄准的暂停事件
             if self.status["connected"] and self.status["cam_stream"] and self.target_detector:
                 try:
-                    self.set_camera_relative_pitch(int(self.target_detector.current_offset_pitch)) # 调整相机俯仰角
-                    self.set_rotation(int(self.target_detector.current_offset_yaw)) # 调整无人机航向
+                    with self._aim_adjust_lock:
+                        if not self._pause_aim_event.is_set():
+                            continue
+                        pitch_offset = int(self.target_detector.current_offset_pitch)
+                        yaw_offset = int(self.target_detector.current_offset_yaw)
+                        if pitch_offset != 0:
+                            self.set_camera_relative_pitch(pitch_offset) # 调整相机俯仰角
+                        if not self._pause_aim_event.is_set():
+                            continue
+                        if yaw_offset != 0:
+                            self.set_rotation(yaw_offset) # 调整无人机航向
 
                 except Exception as e:
                     print(f"激光瞄准时出错: {e}")
@@ -827,6 +903,7 @@ class HulaDrone:
         
         try:
             self.target_detector = TargetDetectorAruco() # 初始化目标检测器
+            self.target_detector.set_pitch_offset(self.aim_pitch_offset_degrees)
             self._aim_ready = True
             self._pause_aim_event = threading.Event() # 用于控制激光瞄准的暂停和恢复
             self._pause_aim_event.clear() # 初始状态为暂停
