@@ -699,7 +699,7 @@ class HulaDroneGUI_CTk_Enhanced:
 
         # 四方飞行
         ctk.CTkLabel(frame, text="边长:", font=self.font_main).grid(row=0, column=0, padx=(self.padding,0), pady=self.padding, sticky="e")
-        self.side_length_entry = ctk.CTkEntry(frame, width=80, font=self.font_main, corner_radius=self.corner_radius); self.side_length_entry.insert(0, "200")
+        self.side_length_entry = ctk.CTkEntry(frame, width=80, font=self.font_main, corner_radius=self.corner_radius); self.side_length_entry.insert(0, "100")
         self.side_length_entry.grid(row=0, column=1, padx=5, pady=self.padding)
 
         # Radio buttons in their own sub-frame for better grouping
@@ -1103,8 +1103,8 @@ class HulaDroneGUI_CTk_Enhanced:
         try:
             self.drone.flag_cam_detect = True
             self.video_stream_show_target_frame = True
-            self.laser_aim_target = True
-            self._run_drone_action_in_thread(self.drone.resume_aim_target)
+            self.laser_aim_target = False
+            self._run_drone_action_in_thread(self.drone.pause_aim_target)
 
             side = float(self.side_length_entry.get())
             unit = self.unit_var.get()
@@ -1112,7 +1112,7 @@ class HulaDroneGUI_CTk_Enhanced:
             self.main_status_label.configure(text=f"状态: 正在开始正方形飞行【含激光瞄准】 (边长: {side} {unit})...", text_color=self._get_status_color("orange"))
             self._run_drone_action_in_thread(self.drone.square_aim_flight, side, unit, time, step_callback=self.drone.set_rotation, completion_callback=completion_callback)
         except ValueError:
-            messagebox.showerror("输入错误", "边长必须为有效数字")
+            messagebox.showerror("输入错误", "边长和瞄准时间必须为有效数字")
 
     def action_toggle_laser(self):
         enable = self.laser_var.get()
