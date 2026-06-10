@@ -4,6 +4,8 @@ import time
 import cv2 # 仅当实际使用cv2功能时保留
 import threading
 import queue
+import socket
+import ipaddress
 from datetime import datetime # 用于 Controller 中的文件名
 import json # 用于 Controller 中的数据转储
 
@@ -41,6 +43,7 @@ class HulaDrone:
         self._pause_aim_event = threading.Event() # 用于控制激光瞄准的暂停（clear）和恢复（set）
         self._aim_adjust_lock = threading.Lock()
         self.aim_pitch_offset_degrees = -2.0
+        self._connect_lock = threading.Lock()
 
         self._status_callbacks = [] # 列表，用于存储注册的回调函数
 
@@ -56,6 +59,83 @@ class HulaDrone:
         if callback in self._status_callbacks:
             self._status_callbacks.remove(callback)
 
+    def _get_route_source_ip(self, target_ip: str):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect((target_ip, 80))
+                return sock.getsockname()[0]
+        except OSError:
+            return None
+
+    def _validate_connection_network(self, target_ip: str) -> bool:
+        try:
+            target_addr = ipaddress.ip_address(target_ip)
+        except ValueError:
+            self.status["message"] = f"IP地址无效: {target_ip}"
+            self._notify_status_callbacks()
+            return False
+
+        source_ip = self._get_route_source_ip(target_ip)
+        if not source_ip:
+            self.status["message"] = f"无法找到到 {target_ip} 的本机网卡，请先连接无人机Wi-Fi"
+            self._notify_status_callbacks()
+            return False
+
+        try:
+            source_addr = ipaddress.ip_address(source_ip)
+        except ValueError:
+            return True
+
+        # Hula无人机直连Wi-Fi通常在192.168.100.0/24。若Windows会从其他网段出站，
+        # pyhula后续容易抛WinError 10049，这里提前给出更明确的提示。
+        if target_addr.version == 4 and source_addr.version == 4:
+            if target_addr.packed[:3] != source_addr.packed[:3]:
+                self.status["message"] = (
+                    f"当前电脑地址 {source_ip} 与无人机 {target_ip} 不在同一网段，"
+                    "请先连接无人机Wi-Fi后重试"
+                )
+                self._notify_status_callbacks()
+                return False
+
+        return True
+
+    def _read_initial_heading_offset(self) -> int:
+        try:
+            yaw_data = self.instance.get_yaw()
+            if yaw_data and len(yaw_data) > 0:
+                return int(yaw_data[0])
+        except Exception as e:
+            print(f"读取初始航向失败，使用0作为航向偏移: {e}")
+        return 0
+
+    def _disable_barrier_if_available(self):
+        try:
+            self.instance.single_fly_barrier_aircraft(0)
+        except Exception as e:
+            print(f"关闭避障失败，继续保持连接: {e}")
+
+    def _probe_sdk_connected(self) -> bool:
+        for method_name in ("get_plane_id", "get_battery", "get_coordinate"):
+            try:
+                value = getattr(self.instance, method_name)()
+                print(f"连接探测成功 {method_name}: {value}")
+                return True
+            except Exception as e:
+                print(f"连接探测失败 {method_name}: {e}")
+        return False
+
+    def _connect_sdk(self, ip: str = None) -> bool:
+        try:
+            if ip:
+                return bool(self.instance.connect(ip))
+            return bool(self.instance.connect())
+        except TypeError as e:
+            if "required argument is not an integer" in str(e):
+                print(f"SDK连接抛出参数错误，尝试确认是否已连接: {e}")
+                if self._probe_sdk_connected():
+                    return True
+            raise
+
     def _notify_status_callbacks(self):
         """调用所有注册的回调函数，传递当前状态的副本。"""
         current_status = self.get_status() # 获取状态副本
@@ -67,17 +147,22 @@ class HulaDrone:
 
     def connect(self, ip: str = None) -> bool:
         """连接无人机，输入IP地址（可选）。成功返回True，失败返回False。"""
+        if not self._connect_lock.acquire(blocking=False):
+            self.status["message"] = "正在连接中，请勿重复点击"
+            self._notify_status_callbacks()
+            return False
+
         try:
-            if not ip: # 自动获取IP
-                connection_success = self.instance.connect()
-            else:
-                connection_success = self.instance.connect(ip)
+            if ip and not self._validate_connection_network(ip):
+                return False
+
+            connection_success = self._connect_sdk(ip)
 
             if connection_success:
                 self.status["connected"] = True
                 self.status["message"] = "连接成功"
-                self._initial_heading_offset = self.instance.get_yaw()[0]
-                self.instance.single_fly_barrier_aircraft(False) # 关闭障碍物检测
+                self._initial_heading_offset = self._read_initial_heading_offset()
+                self._disable_barrier_if_available()
 
                 # 初始化Controller
                 self.controller = Controller(
@@ -105,6 +190,8 @@ class HulaDrone:
             self._notify_status_callbacks()
             print(f"连接错误: {e}")
             return False
+        finally:
+            self._connect_lock.release()
 
     def get_status(self) -> dict:
         """获取无人机当前状态的副本。"""

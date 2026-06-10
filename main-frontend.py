@@ -929,6 +929,7 @@ class HulaDroneGUI_CTk_Enhanced:
     def action_connect_drone(self):
         ip = self.ip_entry.get().strip()
         if not ip: ip = None
+        self.connect_button.configure(text="连接中...", state="disabled")
         self.status_label.configure(text="状态: 正在连接...", text_color=self._get_status_color("orange"))
         self._run_drone_action_in_thread(self.drone.connect, ip)
 
@@ -1174,8 +1175,10 @@ class HulaDroneGUI_CTk_Enhanced:
                         self.status_label.configure(text=current_status_text, text_color=self._get_status_color("orange"))
                     elif "failed" in msg.lower() or "error" in msg.lower() or "disconnected" in msg.lower():
                         self.status_label.configure(text=current_status_text, text_color=self._get_status_color("red"))
+                        self.connect_button.configure(text="连接无人机", state="normal")
                     else:
                         self.status_label.configure(text=current_status_text, text_color=self._get_status_color("grey"))
+                        self.connect_button.configure(text="连接无人机", state="normal")
 
             # Update other status info safely
             battery = drone_status.get("battery_level", "Unknown")

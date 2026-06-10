@@ -1,1 +1,6 @@
 flight_data_20250519_2258.json
+__pycache__/
+*.pyc
+/.python36/
+/.setup/
+/.venv36/
