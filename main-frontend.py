@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 - required for 3D projection registration
 import numpy as np
 import cv2
 import threading
@@ -67,6 +68,13 @@ class HulaDroneGUI_CTk_Enhanced:
             'z': [],
             'timestamps': []
         }
+        self.target_path_data = {
+            'x': [],
+            'y': [],
+            'z': []
+        }
+        self.last_target_location = None
+        self.drone_artists = []
         self.video_stream_active = False
         self.video_stream_show_target_frame = False # 是否在视频流中显示打靶目标框
         self.laser_aim_target = False # 激光是否瞄准目标
@@ -270,26 +278,8 @@ class HulaDroneGUI_CTk_Enhanced:
         path_frame.grid_rowconfigure(0, weight=1)
         path_frame.grid_columnconfigure(0, weight=1)
         
-        # 设置 Matplotlib 字体
-        font_path = cast(PosixPath, Path("./fonts/PingFangSC-Regular.otf"))
-        font = matplotlib.font_manager.FontProperties(fname=font_path)
-        # plt.rcParams['font.family'] = 'PingFang SC'
-        # 创建Matplotlib图形用于显示路径
-        self.fig, self.ax = plt.subplots(figsize=(5, 4))
-        self.ax.set_title("无人机飞行轨迹", fontproperties=font)
-        self.ax.set_xlabel("X 坐标 (cm)", fontproperties=font)
-        self.ax.set_ylabel("Y 坐标 (cm)", fontproperties=font)
-        self.ax.grid(True)
-        
-        # 初始化空的路径线和当前位置点
-        self.path_line, = self.ax.plot([], [], 'b-', linewidth=1.5, label='飞行路径')
-        self.current_pos, = self.ax.plot([], [], 'ro', markersize=8, label='当前位置')
-        self.ax.legend(loc='upper right', prop={'family': 'Microsoft YaHei'})
-        
-        # 设置轴范围初始值
-        self.ax.set_xlim(-300, 300)
-        self.ax.set_ylim(-300, 300)
-        
+        self._setup_rviz_path_scene()
+
         # 将Matplotlib图形嵌入Tkinter窗口
         canvas = FigureCanvasTkAgg(self.fig, master=path_frame)
         self.canvas = canvas
@@ -330,6 +320,210 @@ class HulaDroneGUI_CTk_Enhanced:
             font=self.font_small, 
             corner_radius=self.corner_radius
         ).pack(side="left", padx=5)
+
+    def _get_path_font(self):
+        font_path = Path("./fonts/PingFangSC-Regular.otf")
+        if font_path.exists():
+            return matplotlib.font_manager.FontProperties(fname=cast(PosixPath, font_path))
+        return matplotlib.font_manager.FontProperties(family="Microsoft YaHei")
+
+    def _setup_rviz_path_scene(self):
+        """Create an RViz-style real-time 3D flight scene."""
+        self.path_font = self._get_path_font()
+        self.fig = plt.figure(figsize=(5.6, 4.7), facecolor="#0b1118")
+        self.ax = self.fig.add_subplot(111, projection="3d", facecolor="#0b1118")
+        self.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.93)
+
+        self.ax.set_title("RViz 实时三维飞行场景", fontproperties=self.path_font, color="#e5f4ff", pad=10)
+        self.ax.set_xlabel("X / cm", color="#ff6b6b", labelpad=8)
+        self.ax.set_ylabel("Y / cm", color="#58d68d", labelpad=8)
+        self.ax.set_zlabel("Z / cm", color="#5dade2", labelpad=8)
+        self.ax.view_init(elev=26, azim=-52)
+        self._style_rviz_axis()
+        self._draw_rviz_reference_grid()
+
+        self.ideal_line, = self.ax.plot([], [], [], linestyle="--", linewidth=1.6, color="#ffd166",
+                                        alpha=0.95, label="理想轨迹")
+        self.path_glow, = self.ax.plot([], [], [], linewidth=5.5, color="#00d4ff",
+                                       alpha=0.18, solid_capstyle="round")
+        self.path_line, = self.ax.plot([], [], [], linewidth=2.3, color="#44f1ff",
+                                       alpha=0.98, solid_capstyle="round", label="实际轨迹")
+        self.current_pos, = self.ax.plot([], [], [], marker="o", markersize=8, color="#ff4757",
+                                         markeredgecolor="#ffffff", markeredgewidth=1.0,
+                                         linestyle="", label="当前位置")
+        self.target_pos, = self.ax.plot([], [], [], marker="D", markersize=6, color="#ffd166",
+                                        markeredgecolor="#fff6cc", linestyle="", label="当前目标")
+        self.altitude_line, = self.ax.plot([], [], [], linestyle=":", linewidth=1.2,
+                                           color="#8ecae6", alpha=0.75)
+
+        self.path_hud = self.ax.text2D(
+            0.03, 0.94, "X 0  Y 0  Z 0  |  点数 0",
+            transform=self.ax.transAxes,
+            color="#d9f6ff",
+            fontproperties=self.path_font,
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#101923", edgecolor="#25445c", alpha=0.9)
+        )
+        self.ax.legend(loc="upper right", bbox_to_anchor=(0.98, 0.92), frameon=True,
+                       facecolor="#101923", edgecolor="#25445c", labelcolor="#d9f6ff",
+                       prop={"family": "Microsoft YaHei", "size": 8})
+        self._set_3d_bounds(-300, 300, -300, 300, 0, 220)
+        self._draw_drone_model(0, 0, 0, 0)
+
+    def _style_rviz_axis(self):
+        self.ax.grid(True)
+        for axis in (self.ax.xaxis, self.ax.yaxis, self.ax.zaxis):
+            axis.set_tick_params(colors="#9fb6c8", labelsize=8)
+            try:
+                axis.pane.set_facecolor((0.04, 0.07, 0.10, 0.82))
+                axis.pane.set_edgecolor("#243847")
+                axis._axinfo["grid"]["color"] = (0.26, 0.42, 0.52, 0.38)
+                axis._axinfo["grid"]["linewidth"] = 0.8
+            except Exception:
+                pass
+        try:
+            self.ax.w_xaxis.line.set_color("#3d5568")
+            self.ax.w_yaxis.line.set_color("#3d5568")
+            self.ax.w_zaxis.line.set_color("#3d5568")
+        except Exception:
+            pass
+
+    def _draw_rviz_reference_grid(self):
+        grid_min, grid_max, grid_step = -300, 300, 100
+        grid_color = "#233849"
+        for value in range(grid_min, grid_max + 1, grid_step):
+            alpha = 0.55 if value == 0 else 0.32
+            width = 1.2 if value == 0 else 0.7
+            self.ax.plot([value, value], [grid_min, grid_max], [0, 0], color=grid_color, alpha=alpha, linewidth=width)
+            self.ax.plot([grid_min, grid_max], [value, value], [0, 0], color=grid_color, alpha=alpha, linewidth=width)
+
+        self.ax.quiver(0, 0, 0, 150, 0, 0, color="#ff5c5c", linewidth=2.0, arrow_length_ratio=0.12)
+        self.ax.quiver(0, 0, 0, 0, 150, 0, color="#62d26f", linewidth=2.0, arrow_length_ratio=0.12)
+        self.ax.quiver(0, 0, 0, 0, 0, 130, color="#58a6ff", linewidth=2.0, arrow_length_ratio=0.12)
+        self.ax.text(165, 0, 0, "X", color="#ff5c5c", fontsize=10)
+        self.ax.text(0, 165, 0, "Y", color="#62d26f", fontsize=10)
+        self.ax.text(0, 0, 145, "Z", color="#58a6ff", fontsize=10)
+
+    def _set_3d_bounds(self, x_min, x_max, y_min, y_max, z_min, z_max):
+        self.ax.set_xlim(x_min, x_max)
+        self.ax.set_ylim(y_min, y_max)
+        self.ax.set_zlim(z_min, z_max)
+        if hasattr(self.ax, "set_box_aspect"):
+            self.ax.set_box_aspect((max(1, x_max - x_min), max(1, y_max - y_min), max(1, z_max - z_min) * 0.75))
+
+    def _autoscale_3d_view(self):
+        xs = list(self.flight_path_data["x"]) + list(self.target_path_data["x"])
+        ys = list(self.flight_path_data["y"]) + list(self.target_path_data["y"])
+        zs = list(self.flight_path_data["z"]) + list(self.target_path_data["z"])
+        if not xs:
+            self._set_3d_bounds(-300, 300, -300, 300, 0, 220)
+            return
+
+        margin_xy = 80
+        margin_z = 55
+        x_min, x_max = min(xs) - margin_xy, max(xs) + margin_xy
+        y_min, y_max = min(ys) - margin_xy, max(ys) + margin_xy
+        z_min, z_max = max(0, min(zs) - 25), max(zs) + margin_z
+        span_xy = max(x_max - x_min, y_max - y_min, 260)
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min + y_max) / 2
+        self._set_3d_bounds(center_x - span_xy / 2, center_x + span_xy / 2,
+                            center_y - span_xy / 2, center_y + span_xy / 2,
+                            z_min, max(z_max, 180))
+
+    def _get_current_target_location(self):
+        controller = getattr(self.drone, "controller", None)
+        if controller is None:
+            return None
+        try:
+            target = controller.get_target_location()
+        except Exception:
+            return None
+        if target and len(target) == 3:
+            try:
+                return [float(target[0]), float(target[1]), float(target[2])]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _update_target_path_from_controller(self):
+        target = self._get_current_target_location()
+        if target is None:
+            self.target_pos.set_data_3d([], [], [])
+            return
+
+        should_append = self.last_target_location is None
+        if self.last_target_location is not None:
+            delta = sum(abs(target[i] - self.last_target_location[i]) for i in range(3))
+            should_append = delta > 2
+
+        if should_append:
+            self.target_path_data["x"].append(target[0])
+            self.target_path_data["y"].append(target[1])
+            self.target_path_data["z"].append(target[2])
+            self.last_target_location = target
+
+        self.ideal_line.set_data_3d(self.target_path_data["x"], self.target_path_data["y"], self.target_path_data["z"])
+        self.target_pos.set_data_3d([target[0]], [target[1]], [target[2]])
+
+    def _draw_drone_model(self, x, y, z, heading=0):
+        for artist in self.drone_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self.drone_artists = []
+
+        try:
+            heading_rad = np.deg2rad(float(heading))
+        except (TypeError, ValueError):
+            heading_rad = 0.0
+
+        cos_h, sin_h = np.cos(heading_rad), np.sin(heading_rad)
+        rot = np.array([[cos_h, -sin_h], [sin_h, cos_h]])
+        arm = 28
+        rotor_radius = 8
+        local_points = {
+            "front": np.array([arm, 0.0]),
+            "back": np.array([-arm, 0.0]),
+            "left": np.array([0.0, arm]),
+            "right": np.array([0.0, -arm]),
+        }
+        world = {name: rot.dot(point) + np.array([x, y]) for name, point in local_points.items()}
+
+        arm_color = "#e8f7ff"
+        accent = "#20d4ff"
+        front_color = "#ffd166"
+        self.drone_artists.append(self.ax.plot([world["front"][0], world["back"][0]],
+                                               [world["front"][1], world["back"][1]],
+                                               [z, z], color=arm_color, linewidth=3.0,
+                                               solid_capstyle="round")[0])
+        self.drone_artists.append(self.ax.plot([world["left"][0], world["right"][0]],
+                                               [world["left"][1], world["right"][1]],
+                                               [z, z], color=arm_color, linewidth=3.0,
+                                               solid_capstyle="round")[0])
+        self.drone_artists.append(self.ax.scatter([x], [y], [z], s=95, color="#f8fafc",
+                                                  edgecolors=accent, linewidths=1.5, depthshade=False))
+        self.drone_artists.append(self.ax.quiver(x, y, z + 2, cos_h * 28, sin_h * 28, 0,
+                                                 color=front_color, linewidth=2.0, arrow_length_ratio=0.35))
+
+        theta = np.linspace(0, 2 * np.pi, 34)
+        for name, point in world.items():
+            color = front_color if name == "front" else accent
+            cx, cy = point[0], point[1]
+            circle_x = cx + rotor_radius * np.cos(theta)
+            circle_y = cy + rotor_radius * np.sin(theta)
+            circle_z = np.full_like(theta, z)
+            self.drone_artists.append(self.ax.plot(circle_x, circle_y, circle_z,
+                                                   color=color, linewidth=1.8, alpha=0.95)[0])
+            self.drone_artists.append(self.ax.scatter([cx], [cy], [z], s=20,
+                                                      color=color, depthshade=False))
+
+        shadow_radius = 18
+        shadow_x = x + shadow_radius * np.cos(theta)
+        shadow_y = y + shadow_radius * np.sin(theta)
+        self.drone_artists.append(self.ax.plot(shadow_x, shadow_y, np.zeros_like(theta),
+                                               color="#5dade2", linewidth=1.0, alpha=0.28)[0])
 
     def _create_section_frame(self, parent, title_text, row, column=0, columnspan=1):
         """创建带标题的区域框架"""
@@ -723,8 +917,8 @@ class HulaDroneGUI_CTk_Enhanced:
         ctk.CTkButton(frame, text="飞行正方形路径（瞄准）", command=self.action_square_aim_flight, height=self.button_height, font=self.font_main, corner_radius=self.corner_radius).grid(row=1, column=2, padx=(0, self.padding), pady=self.padding, sticky="ew")
 
     # --- 飞行路径绘制相关方法 ---
-    def update_flight_path(self, x, y, z):
-        """更新飞行路径数据并绘制"""
+    def update_flight_path(self, x, y, z, heading=None):
+        """更新实时 3D 飞行轨迹场景。"""
         if (not hasattr(self, 'main_interface_created') or not self.main_interface_created or 
             self.cleanup_in_progress or not self.gui_active):
             return
@@ -739,30 +933,22 @@ class HulaDroneGUI_CTk_Enhanced:
             self.flight_path_data['y'].append(y)
             self.flight_path_data['z'].append(z)
             self.flight_path_data['timestamps'].append(time.time())
-            
-            # Update plot
-            self.path_line.set_data(self.flight_path_data['x'], self.flight_path_data['y'])
-            self.current_pos.set_data([x], [y])
-            
-            # Dynamic view adjustment
-            if len(self.flight_path_data['x']) > 1:
-                x_min = min(self.flight_path_data['x']) - 50
-                x_max = max(self.flight_path_data['x']) + 50
-                y_min = min(self.flight_path_data['y']) - 50
-                y_max = max(self.flight_path_data['y']) + 50
-                
-                # Ensure minimum range
-                x_range = x_max - x_min
-                y_range = y_max - y_min
-                if x_range < 200:
-                    center_x = (x_min + x_max) / 2
-                    x_min, x_max = center_x - 100, center_x + 100
-                if y_range < 200:
-                    center_y = (y_min + y_max) / 2
-                    y_min, y_max = center_y - 100, center_y + 100
-                    
-                self.ax.set_xlim(x_min, x_max)
-                self.ax.set_ylim(y_min, y_max)
+
+            self._update_target_path_from_controller()
+
+            xs = self.flight_path_data['x']
+            ys = self.flight_path_data['y']
+            zs = self.flight_path_data['z']
+            self.path_line.set_data_3d(xs, ys, zs)
+            self.path_glow.set_data_3d(xs, ys, zs)
+            self.current_pos.set_data_3d([x], [y], [z])
+            self.altitude_line.set_data_3d([x, x], [y, y], [0, z])
+
+            self._draw_drone_model(x, y, z, heading)
+            self._autoscale_3d_view()
+            self.path_hud.set_text(
+                f"X {x:.1f}  Y {y:.1f}  Z {z:.1f} cm  |  点数 {len(xs)}"
+            )
             
             # Refresh canvas
             canvas = self.canvas
@@ -777,28 +963,9 @@ class HulaDroneGUI_CTk_Enhanced:
         """重置飞行路径视图"""
         if not hasattr(self, 'main_interface_created') or not self.main_interface_created:
             return
-            
-        if len(self.flight_path_data['x']) > 0:
-            x_min = min(self.flight_path_data['x']) - 50
-            x_max = max(self.flight_path_data['x']) + 50
-            y_min = min(self.flight_path_data['y']) - 50
-            y_max = max(self.flight_path_data['y']) + 50
-            
-            # 确保视图有最小范围和适当的纵横比
-            x_range = max(200, x_max - x_min)
-            y_range = max(200, y_max - y_min)
-            
-            # 保持大致相同的缩放级别
-            center_x = (x_min + x_max) / 2
-            center_y = (y_min + y_max) / 2
-            max_range = max(x_range, y_range)
-            
-            self.ax.set_xlim(center_x - max_range/2, center_x + max_range/2)
-            self.ax.set_ylim(center_y - max_range/2, center_y + max_range/2)
-        else:
-            # 默认视图范围
-            self.ax.set_xlim(-300, 300)
-            self.ax.set_ylim(-300, 300)
+
+        self.ax.view_init(elev=26, azim=-52)
+        self._autoscale_3d_view()
         
         canvas = self.canvas
         if canvas is not None:
@@ -815,12 +982,24 @@ class HulaDroneGUI_CTk_Enhanced:
             'z': [],
             'timestamps': []
         }
-        self.path_line.set_data([], [])
-        self.current_pos.set_data([], [])
-        
+        self.target_path_data = {
+            'x': [],
+            'y': [],
+            'z': []
+        }
+        self.last_target_location = None
+        self.path_line.set_data_3d([], [], [])
+        self.path_glow.set_data_3d([], [], [])
+        self.ideal_line.set_data_3d([], [], [])
+        self.current_pos.set_data_3d([], [], [])
+        self.target_pos.set_data_3d([], [], [])
+        self.altitude_line.set_data_3d([], [], [])
+        self._draw_drone_model(0, 0, 0, 0)
+        self.path_hud.set_text("X 0  Y 0  Z 0  |  点数 0")
+
         # 恢复默认视图
-        self.ax.set_xlim(-300, 300)
-        self.ax.set_ylim(-300, 300)
+        self.ax.view_init(elev=26, azim=-52)
+        self._set_3d_bounds(-300, 300, -300, 300, 0, 220)
         
         canvas = self.canvas
         if canvas is not None:
@@ -1220,7 +1399,7 @@ class HulaDroneGUI_CTk_Enhanced:
                 if loc[0] != "N/A" and loc[1] != "N/A" and height != "N/A":
                     try:
                         x, y, z = float(loc[0]), float(loc[1]), float(height)
-                        self.update_flight_path(x, y, z)
+                        self.update_flight_path(x, y, z, heading)
                     except (ValueError, TypeError):
                         pass
 
