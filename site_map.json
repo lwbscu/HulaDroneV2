@@ -1,0 +1,37 @@
+{
+  "name": "fixed_training_field",
+  "unit": "cm",
+  "coordinate_frame": {
+    "x_axis": "field_x_positive",
+    "y_axis": "field_y_positive",
+    "display_rotation_z_ccw_deg": -90
+  },
+  "boundary": {
+    "x_min": 0,
+    "x_max": 700,
+    "y_min": 0,
+    "y_max": 400,
+    "z_min": 0,
+    "z_max": 250
+  },
+  "takeoff": {
+    "x": 595,
+    "y": 105,
+    "z": 0
+  },
+  "floor_grid": {
+    "tile_size_cm": 28,
+    "x_tiles": 25,
+    "style": "gray_white_checkerboard",
+    "tile_alpha": 0.72
+  },
+  "drone_visual": {
+    "texture_path": "assets/drone_texture.png",
+    "texture_size_cm": 82,
+    "front_axis": "image_right",
+    "max_texture_pixels": 384
+  },
+  "rings": [],
+  "pickup_points": [],
+  "drop_points": []
+}
