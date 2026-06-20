@@ -29,7 +29,7 @@
     "texture_path": "assets/drone_texture.png",
     "texture_size_cm": 82,
     "front_axis": "image_right",
-    "max_texture_pixels": 384
+    "max_texture_pixels": 768
   },
   "rings": [],
   "pickup_points": [],

@@ -457,7 +457,7 @@ class HulaDroneGUI_CTk_Enhanced:
                 "texture_path": "assets/drone_texture.png",
                 "texture_size_cm": 82,
                 "front_axis": "image_right",
-                "max_texture_pixels": 384,
+                "max_texture_pixels": 768,
             },
             "rings": [],
             "pickup_points": [],
@@ -879,10 +879,14 @@ class HulaDroneGUI_CTk_Enhanced:
 
         visual = self.site_map.get("drone_visual", {})
         max_texture_pixels = int(visual.get("max_texture_pixels", 256))
-        max_texture_pixels = max(96, min(512, max_texture_pixels))
+        max_texture_pixels = max(96, min(1024, max_texture_pixels))
         max_pixels = max(texture.shape[0], texture.shape[1])
-        step = max(1, int(np.ceil(max_pixels / float(max_texture_pixels))))
-        texture = texture[::step, ::step, :]
+        if max_pixels > max_texture_pixels:
+            scale = float(max_texture_pixels) / float(max_pixels)
+            new_width = max(1, int(round(texture.shape[1] * scale)))
+            new_height = max(1, int(round(texture.shape[0] * scale)))
+            texture = cv2.resize(texture, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        texture = np.clip(texture, 0.0, 1.0)
         self.drone_texture_cache = texture
         return texture
 
