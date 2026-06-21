@@ -1203,6 +1203,14 @@ class HulaDrone:
             return
         
     def stop_image_stream(self):
+        self.flag_cam_detect = False
+        self.flag_monocular_distance = False
+        self.flag_red_circle_laser_track = False
+        self._red_circle_track_ready = False
+        self._red_circle_hit_confirm_count = 0
+        self._red_circle_track_event.set()
+        self._set_red_circle_laser(False, force=True)
+
         if not self.status.get("cam_stream", False):
             self.status["message"] = "视频流已经关闭"
             self._notify_status_callbacks()

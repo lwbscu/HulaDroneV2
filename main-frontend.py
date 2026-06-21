@@ -1805,6 +1805,7 @@ class HulaDroneGUI_CTk_Enhanced:
     def stop_video_stream(self):
         """停止视频流处理"""
         self.video_stream_active = False
+        self._reset_video_processing_ui_state()
         self._set_video_stream_button_state(False)
         
         if hasattr(self, 'video_animation') and self.video_animation is not None:
@@ -1830,6 +1831,21 @@ class HulaDroneGUI_CTk_Enhanced:
             pass
 
     # --- 动作方法 ---
+    def _reset_video_processing_ui_state(self):
+        self.video_stream_show_target_frame = False
+        self.video_stream_show_distance_frame = False
+        self.laser_aim_target = False
+        self.red_circle_laser_tracking = False
+        if hasattr(self, "drone"):
+            self.drone.flag_cam_detect = False
+        for var_name in ("monocular_distance_var", "red_circle_track_var", "laser_var"):
+            var = getattr(self, var_name, None)
+            if var is not None:
+                try:
+                    var.set(False)
+                except Exception:
+                    pass
+
     def _set_video_stream_button_state(self, active):
         if not hasattr(self, "video_stream_button"):
             return
