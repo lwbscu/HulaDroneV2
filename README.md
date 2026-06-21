@@ -98,6 +98,8 @@ To prevent the GUI from freezing, all long-running tasks are executed in separat
 
     ![PNP Pose Detection Output](.github/PnpPosDetect.png)
 
+3.  **Monocular Distance Estimation**: The GUI can enable single-camera distance estimation for a red circular paper target. Enter the real target diameter in centimeters, `10` cm for the prepared red circle, then turn on `单目测距` in the function controls. The estimator segments red regions, filters circular targets, and uses the calibrated camera focal length plus the circle's apparent pixel diameter to overlay an approximate distance and near-obstacle warning on the live frame. Turn on `红圆激光跟踪` to automatically adjust the camera pitch and, after takeoff, drone yaw toward the red paper target. The laser is enabled only after the calibrated laser aim point is confirmed for consecutive frames to be inside a safe inner area of the red circle, with enough red pixels around the predicted spot. If the target is lost or the predicted spot leaves the paper, the laser is turned off. Use `激光偏移X/Y(px)` to calibrate the laser-camera offset when the laser spot does not land on the paper.
+
 ---
 
 ## Graphical User Interface (GUI)
