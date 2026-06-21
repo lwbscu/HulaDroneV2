@@ -440,18 +440,20 @@ class HulaDroneGUI_CTk_Enhanced:
             },
             "boundary": {
                 "x_min": 0,
-                "x_max": 700,
+                "x_max": 682.1152,
                 "y_min": 0,
-                "y_max": 400,
+                "y_max": 372.0,
                 "z_min": 0,
                 "z_max": 250,
             },
-            "takeoff": {"x": 595, "y": 105, "z": 0},
+            "takeoff": {"x": 538.4037, "y": 143.7115, "z": 0},
             "floor_grid": {
-                "tile_size_cm": 28,
-                "x_tiles": 25,
+                "tile_size_cm": 28.1923,
+                "x_tiles": 24,
+                "y_tiles": 13,
+                "border_width_cm": 2.75,
                 "style": "gray_white_checkerboard",
-                "tile_alpha": 0.72,
+                "tile_alpha": 0.86,
             },
             "drone_visual": {
                 "texture_path": "assets/drone_texture.png",
@@ -502,9 +504,9 @@ class HulaDroneGUI_CTk_Enhanced:
         boundary = self.site_map.get("boundary", {})
         return {
             "x_min": float(boundary.get("x_min", 0)),
-            "x_max": float(boundary.get("x_max", 700)),
+            "x_max": float(boundary.get("x_max", 682.1152)),
             "y_min": float(boundary.get("y_min", 0)),
-            "y_max": float(boundary.get("y_max", 400)),
+            "y_max": float(boundary.get("y_max", 372.0)),
             "z_min": float(boundary.get("z_min", 0)),
             "z_max": float(boundary.get("z_max", 250)),
         }
@@ -512,8 +514,8 @@ class HulaDroneGUI_CTk_Enhanced:
     def _get_takeoff_point(self):
         takeoff = self.site_map.get("takeoff", {})
         return [
-            float(takeoff.get("x", 595)),
-            float(takeoff.get("y", 105)),
+            float(takeoff.get("x", 538.4037)),
+            float(takeoff.get("y", 143.7115)),
             float(takeoff.get("z", 0)),
         ]
 
@@ -550,24 +552,24 @@ class HulaDroneGUI_CTk_Enhanced:
 
         self.ideal_line, = self.ax.plot([], [], [], linestyle="--", linewidth=2.6, color="#ffd166",
                                         alpha=0.95, label="理想轨迹")
-        self.path_glow, = self.ax.plot([], [], [], linewidth=10.0, color="#00d4ff",
-                                       alpha=0.42, solid_capstyle="round")
-        self.path_line, = self.ax.plot([], [], [], linewidth=4.4, color="#00fff0",
+        self.path_glow, = self.ax.plot([], [], [], linewidth=0.0, color="#0077ff",
+                                       alpha=0.0, solid_capstyle="round")
+        self.path_line, = self.ax.plot([], [], [], linewidth=2.0, color="#4b1f8f",
                                        alpha=0.98, solid_capstyle="round", label="实际轨迹")
-        self.path_points = self.ax.scatter([], [], [], s=26, color="#f8ffff",
-                                           edgecolors="#00d4ff", linewidths=0.8,
+        self.path_points = self.ax.scatter([], [], [], s=0, color="#f8ffff",
+                                           edgecolors="#00d4ff", linewidths=0.0,
                                            depthshade=False, label="轨迹采样点")
-        self.current_pos, = self.ax.plot([], [], [], marker="o", markersize=14, color="#ff2bd6",
-                                         markeredgecolor="#ffffff", markeredgewidth=1.0,
+        self.current_pos, = self.ax.plot([], [], [], marker="o", markersize=0, color="#00d8ff",
+                                         markeredgecolor="#ffffff", markeredgewidth=0.0,
                                          linestyle="", label="当前位置")
-        self.ground_pos = self.ax.scatter([], [], [], marker="o", s=120, color="#ff2bd6",
-                                          edgecolors="#ffffff", linewidths=0.8,
-                                          alpha=0.62, depthshade=False)
+        self.ground_pos = self.ax.scatter([], [], [], marker="o", s=0, color="#00d8ff",
+                                          edgecolors="#ffffff", linewidths=0.0,
+                                          alpha=0.0, depthshade=False)
         self.target_pos, = self.ax.plot([], [], [], marker="D", markersize=10, color="#ffd166",
                                         markeredgecolor="#fff6cc", markeredgewidth=1.0,
                                         linestyle="", label="当前目标")
-        self.altitude_line, = self.ax.plot([], [], [], linestyle="-", linewidth=2.6,
-                                           color="#ff2bd6", alpha=0.85)
+        self.altitude_line, = self.ax.plot([], [], [], linestyle="-", linewidth=0.0,
+                                           color="#00d8ff", alpha=0.0)
 
         takeoff_x, takeoff_y, takeoff_z = self._get_takeoff_point()
         self.path_hud = self.ax.text2D(
@@ -579,9 +581,7 @@ class HulaDroneGUI_CTk_Enhanced:
             fontsize=9,
             bbox=dict(boxstyle="round,pad=0.35", facecolor="#101923", edgecolor="#25445c", alpha=0.9)
         )
-        self.ax.legend(loc="upper right", bbox_to_anchor=(0.98, 0.92), frameon=True,
-                       facecolor="#101923", edgecolor="#25445c", labelcolor="#d9f6ff",
-                       prop={"family": "Microsoft YaHei", "size": 8})
+        # Keep the live scene clean; HUD and colors are enough during flight.
         self._set_default_map_view()
         drone_x, drone_y, drone_z = self._map_to_scene(takeoff_x, takeoff_y, takeoff_z)
         self._draw_drone_model(drone_x, drone_y, drone_z, self._scene_heading(0))
@@ -608,27 +608,37 @@ class HulaDroneGUI_CTk_Enhanced:
         boundary = self._get_map_boundary()
         self._draw_checkerboard_floor(boundary)
 
-        grid_step = 28
-        grid_color = "#9aa3aa"
-        x_min, x_max = int(boundary["x_min"]), int(boundary["x_max"])
-        y_min, y_max = int(boundary["y_min"]), int(boundary["y_max"])
+        floor_grid = self.site_map.get("floor_grid", {})
+        grid_step = float(floor_grid.get("tile_size_cm", 28.1923))
+        border_width = max(0.0, float(floor_grid.get("border_width_cm", 0) or 0))
+        x_tiles = int(floor_grid.get("x_tiles", 0) or 0)
+        y_tiles = int(floor_grid.get("y_tiles", 0) or 0)
+        grid_color = "#d2dae0"
+        x_min, x_max = boundary["x_min"], boundary["x_max"]
+        y_min, y_max = boundary["y_min"], boundary["y_max"]
+        inner_x_min = x_min + border_width
+        inner_y_min = y_min + border_width
+        inner_x_max = min(x_max - border_width, inner_x_min + max(1, x_tiles) * grid_step)
+        inner_y_max = min(y_max - border_width, inner_y_min + max(1, y_tiles) * grid_step)
         z_min = boundary["z_min"] + 0.3
 
-        for x_value in range(x_min, x_max + 1, grid_step):
+        for x_index in range(max(1, x_tiles) + 1):
+            x_value = min(inner_x_min + x_index * grid_step, inner_x_max)
             sx, sy, sz = self._map_many_to_scene(
                 [x_value, x_value],
-                [y_min, y_max],
+                [inner_y_min, inner_y_max],
                 [z_min, z_min],
             )
-            self.ax.plot(sx, sy, sz, color=grid_color, alpha=0.42, linewidth=0.45)
+            self.ax.plot(sx, sy, sz, color=grid_color, alpha=0.32, linewidth=0.38)
 
-        for y_value in range(y_min, y_max + 1, grid_step):
+        for y_index in range(max(1, y_tiles) + 1):
+            y_value = min(inner_y_min + y_index * grid_step, inner_y_max)
             sx, sy, sz = self._map_many_to_scene(
-                [x_min, x_max],
+                [inner_x_min, inner_x_max],
                 [y_value, y_value],
                 [z_min, z_min],
             )
-            self.ax.plot(sx, sy, sz, color=grid_color, alpha=0.42, linewidth=0.45)
+            self.ax.plot(sx, sy, sz, color=grid_color, alpha=0.32, linewidth=0.38)
 
         origin_x, origin_y, origin_z = self._map_to_scene(0, 0, 0)
         x_tip = self._map_to_scene(150, 0, 0)
@@ -651,43 +661,60 @@ class HulaDroneGUI_CTk_Enhanced:
         tile_size = float(floor_grid.get("tile_size_cm", 28))
         if tile_size <= 0:
             tile_size = 28.0
+        x_tiles = int(floor_grid.get("x_tiles", 0) or 0)
+        y_tiles = int(floor_grid.get("y_tiles", 0) or 0)
+        border_width = float(floor_grid.get("border_width_cm", 0) or 0)
+        if x_tiles <= 0:
+            x_tiles = max(1, int(round((boundary["x_max"] - boundary["x_min"]) / tile_size)))
+        if y_tiles <= 0:
+            y_tiles = max(1, int(round((boundary["y_max"] - boundary["y_min"]) / tile_size)))
+        border_width = max(0.0, border_width)
 
         x_min, x_max = boundary["x_min"], boundary["x_max"]
         y_min, y_max = boundary["y_min"], boundary["y_max"]
         z_floor = boundary["z_min"]
-        light_tile = "#e8ecef"
-        dark_tile = "#8f969b"
-        edge_color = "#c9d0d4"
-        tile_alpha = float(floor_grid.get("tile_alpha", 0.72))
+        light_tile = "#ffffff"
+        dark_tile = "#edf2f6"
+        edge_color = "#ffffff"
+        border_color = "#f8fafc"
+        tile_alpha = float(floor_grid.get("tile_alpha", 0.86))
         tile_alpha = max(0.15, min(1.0, tile_alpha))
 
-        y_index = 0
-        y0 = y_min
-        while y0 < y_max - 1e-6:
-            y1 = min(y0 + tile_size, y_max)
-            x_index = 0
-            x0 = x_min
-            while x0 < x_max - 1e-6:
-                x1 = min(x0 + tile_size, x_max)
-                scene_x, scene_y, scene_z = self._map_many_to_scene(
-                    [x0, x1, x1, x0],
-                    [y0, y0, y1, y1],
-                    [z_floor, z_floor, z_floor, z_floor],
-                )
-                vertices = [list(zip(scene_x, scene_y, scene_z))]
+        def add_floor_quad(x0, x1, y0, y1, face_color, linewidth=0.18, alpha=None):
+            if x1 <= x0 or y1 <= y0:
+                return
+            scene_x, scene_y, scene_z = self._map_many_to_scene(
+                [x0, x1, x1, x0],
+                [y0, y0, y1, y1],
+                [z_floor, z_floor, z_floor, z_floor],
+            )
+            tile = Poly3DCollection(
+                [list(zip(scene_x, scene_y, scene_z))],
+                facecolors=face_color,
+                edgecolors=edge_color,
+                linewidths=linewidth,
+                alpha=tile_alpha if alpha is None else alpha,
+            )
+            self.ax.add_collection3d(tile)
+
+        inner_x_min = min(x_max, x_min + border_width)
+        inner_y_min = min(y_max, y_min + border_width)
+        inner_x_max = min(x_max - border_width, inner_x_min + x_tiles * tile_size)
+        inner_y_max = min(y_max - border_width, inner_y_min + y_tiles * tile_size)
+
+        add_floor_quad(x_min, x_max, y_min, inner_y_min, border_color, linewidth=0.12, alpha=tile_alpha)
+        add_floor_quad(x_min, x_max, inner_y_max, y_max, border_color, linewidth=0.12, alpha=tile_alpha)
+        add_floor_quad(x_min, inner_x_min, inner_y_min, inner_y_max, border_color, linewidth=0.12, alpha=tile_alpha)
+        add_floor_quad(inner_x_max, x_max, inner_y_min, inner_y_max, border_color, linewidth=0.12, alpha=tile_alpha)
+
+        for y_index in range(y_tiles):
+            y0 = inner_y_min + y_index * tile_size
+            y1 = min(y0 + tile_size, inner_y_max)
+            for x_index in range(x_tiles):
+                x0 = inner_x_min + x_index * tile_size
+                x1 = min(x0 + tile_size, inner_x_max)
                 face_color = light_tile if (x_index + y_index) % 2 == 0 else dark_tile
-                tile = Poly3DCollection(
-                    vertices,
-                    facecolors=face_color,
-                    edgecolors=edge_color,
-                    linewidths=0.18,
-                    alpha=tile_alpha,
-                )
-                self.ax.add_collection3d(tile)
-                x0 = x1
-                x_index += 1
-            y0 = y1
-            y_index += 1
+                add_floor_quad(x0, x1, y0, y1, face_color, linewidth=0.16)
 
     def _draw_site_prior_map(self):
         boundary = self._get_map_boundary()
@@ -723,11 +750,11 @@ class HulaDroneGUI_CTk_Enhanced:
         takeoff_x, takeoff_y, takeoff_z = self._get_takeoff_point()
         scene_takeoff = self._map_to_scene(takeoff_x, takeoff_y, takeoff_z)
         self.ax.scatter([scene_takeoff[0]], [scene_takeoff[1]], [scene_takeoff[2]],
-                        marker="*", s=140, color="#ffd166", edgecolors="#fff6cc",
+                        marker="*", s=0, color="#ffd166", edgecolors="#fff6cc",
                         linewidths=1.0, depthshade=False, label="起飞点")
         self.ax.text(scene_takeoff[0], scene_takeoff[1], scene_takeoff[2] + 18,
                      f"起飞点\nX{takeoff_x:.0f} Y{takeoff_y:.0f}", color="#ffd166", fontsize=8,
-                     fontproperties=self.path_font, ha="center")
+                     fontproperties=self.path_font, ha="center", alpha=0.0)
 
     def _set_3d_bounds(self, x_min, x_max, y_min, y_max, z_min, z_max):
         self.ax.set_xlim(x_min, x_max)
@@ -781,7 +808,7 @@ class HulaDroneGUI_CTk_Enhanced:
         x_min, x_max = min(xs) - margin_xy, max(xs) + margin_xy
         y_min, y_max = min(ys) - margin_xy, max(ys) + margin_xy
         z_min, z_max = max(0, min(zs) - 25), max(zs) + margin_z
-        span_xy = max(x_max - x_min, y_max - y_min, 180)
+        span_xy = max(x_max - x_min, y_max - y_min, 300)
         center_x = (x_min + x_max) / 2
         center_y = (y_min + y_max) / 2
         self._set_3d_bounds(center_x - span_xy / 2, center_x + span_xy / 2,
@@ -948,28 +975,28 @@ class HulaDroneGUI_CTk_Enhanced:
         self.drone_artists.append(surface)
 
         front_tip = np.array([x, y]) + front_axis * (half_front + 48)
-        arrow_base = np.array([x, y]) + front_axis * (half_front * 0.10)
-        heading_arrow_len = half_front + 42
+        arrow_base = np.array([x, y]) + front_axis * (half_front * 0.16)
+        heading_arrow_len = half_front * 0.78
         self.drone_artists.append(
             self.ax.quiver(
-                arrow_base[0], arrow_base[1], z + 24,
+                arrow_base[0], arrow_base[1], z + 18,
                 front_axis[0] * heading_arrow_len, front_axis[1] * heading_arrow_len, 0,
-                color="#ffd166", linewidth=4.4, arrow_length_ratio=0.22
+                color="#ffd166", linewidth=2.4, arrow_length_ratio=0.24
             )
         )
         self.drone_artists.append(
             self.ax.quiver(
                 x, y, 2,
                 front_axis[0] * heading_arrow_len, front_axis[1] * heading_arrow_len, 0,
-                color="#ffd166", linewidth=2.4, alpha=0.68, arrow_length_ratio=0.22
+                color="#ffd166", linewidth=0.0, alpha=0.0, arrow_length_ratio=0.22
             )
         )
         self.drone_artists.append(
             self.ax.text(front_tip[0], front_tip[1], z + 34, "机头朝向",
-                         color="#ffd166", fontsize=11,
+                         color="#ffd166", fontsize=0, alpha=0.0,
                          fontproperties=self.path_font, ha="center",
                          bbox=dict(boxstyle="round,pad=0.2", facecolor="#101923",
-                                   edgecolor="#ffd166", alpha=0.78))
+                                   edgecolor="#ffd166", alpha=0.0))
         )
 
         theta = np.linspace(0, 2 * np.pi, 48)
@@ -978,11 +1005,11 @@ class HulaDroneGUI_CTk_Enhanced:
         shadow_y = y + shadow_radius * np.sin(theta)
         self.drone_artists.append(
             self.ax.plot(shadow_x, shadow_y, np.zeros_like(theta),
-                         color="#ff2bd6", linewidth=2.6, alpha=0.58)[0]
+                         color="#071018", linewidth=3.0, alpha=0.26)[0]
         )
         self.drone_artists.append(
-            self.ax.scatter([x], [y], [z + 7], s=95, color="#ffffff",
-                            edgecolors="#00e5ff", linewidths=1.8, depthshade=False)
+            self.ax.scatter([x], [y], [z + 7], s=0, color="#ffffff",
+                            edgecolors="#00e5ff", linewidths=0.0, alpha=0.0, depthshade=False)
         )
         return True
 
@@ -1424,10 +1451,11 @@ class HulaDroneGUI_CTk_Enhanced:
             border_width=2
         ).grid(row=0, column=0, padx=self.padding, pady=self.padding)
 
-        ctk.CTkButton(
+        self.video_stream_button = ctk.CTkButton(
             frame, text="开启视频流", command=self.action_capture_image_stream,
             height=self.button_height, font=self.font_main, corner_radius=self.corner_radius
-        ).grid(row=0, column=1, padx=(0, self.padding), pady=self.padding, sticky="ew")
+        )
+        self.video_stream_button.grid(row=0, column=1, padx=(0, self.padding), pady=self.padding, sticky="ew")
 
     ## --- 自动飞行 UI ---
     def setup_auto_flight_ui(self, parent_container):
@@ -1594,6 +1622,7 @@ class HulaDroneGUI_CTk_Enhanced:
                 
         if not self.video_stream_active:
             self.video_stream_active = True
+            self._set_video_stream_button_state(True)
             if hasattr(self, 'video_status_label') and self.video_status_label.winfo_exists():
                 self.video_status_label.configure(text="视频流已开启")
             
@@ -1654,6 +1683,7 @@ class HulaDroneGUI_CTk_Enhanced:
     def stop_video_stream(self):
         """停止视频流处理"""
         self.video_stream_active = False
+        self._set_video_stream_button_state(False)
         
         if hasattr(self, 'video_animation') and self.video_animation is not None:
             try:
@@ -1678,6 +1708,15 @@ class HulaDroneGUI_CTk_Enhanced:
             pass
 
     # --- 动作方法 ---
+    def _set_video_stream_button_state(self, active):
+        if not hasattr(self, "video_stream_button"):
+            return
+        try:
+            if self.video_stream_button.winfo_exists():
+                self.video_stream_button.configure(text="关闭视频流" if active else "打开视频流")
+        except Exception:
+            pass
+
     def _run_drone_action_in_thread(self, action_func, *args, **kwargs):
         thread = threading.Thread(target=action_func, args=args, kwargs=kwargs, daemon=True)
         thread.start()
@@ -1924,6 +1963,10 @@ class HulaDroneGUI_CTk_Enhanced:
             self.main_status_label.configure(text="状态: 正在开启视频流...", text_color=self._get_status_color("orange"))
             self._run_drone_action_in_thread(self.drone.start_image_stream, self.image_raw_queue, self.frame_queue)
             self.start_video_stream()
+        else:
+            self.main_status_label.configure(text="状态: 正在关闭视频流...", text_color=self._get_status_color("orange"))
+            self.stop_video_stream()
+            self._run_drone_action_in_thread(self.drone.stop_image_stream)
         # else:
         #     self.main_status_label.configure(text="状态: 正在关闭视频流...", text_color=self._get_status_color("orange"))
         #     self._run_drone_action_in_thread(self.drone.stop_image_stream)

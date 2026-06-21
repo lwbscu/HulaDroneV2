@@ -8,28 +8,30 @@
   },
   "boundary": {
     "x_min": 0,
-    "x_max": 700,
+    "x_max": 682.1152,
     "y_min": 0,
-    "y_max": 400,
+    "y_max": 372,
     "z_min": 0,
     "z_max": 250
   },
   "takeoff": {
-    "x": 595,
-    "y": 105,
+    "x": 538.4037,
+    "y": 143.7115,
     "z": 0
   },
   "floor_grid": {
-    "tile_size_cm": 28,
-    "x_tiles": 25,
+    "tile_size_cm": 28.1923,
+    "x_tiles": 24,
+    "y_tiles": 13,
+    "border_width_cm": 2.75,
     "style": "gray_white_checkerboard",
-    "tile_alpha": 0.72
+    "tile_alpha": 0.86
   },
   "drone_visual": {
     "texture_path": "assets/drone_texture.png",
-    "texture_size_cm": 82,
+    "texture_size_cm": 120,
     "front_axis": "image_right",
-    "max_texture_pixels": 768
+    "max_texture_pixels": 960
   },
   "rings": [],
   "pickup_points": [],

@@ -992,6 +992,33 @@ class HulaDrone:
             self._notify_status_callbacks()
             return
         
+    def stop_image_stream(self):
+        if not self.status.get("cam_stream", False):
+            self.status["message"] = "视频流已经关闭"
+            self._notify_status_callbacks()
+            return
+
+        self.status["cam_stream"] = False
+        self._cam_ready = False
+
+        try:
+            if self.instance is not None:
+                self.instance.Plane_cmd_swith_rtp(1)
+        except Exception as e:
+            print(f"关闭视频流命令失败: {e}")
+
+        if self._cam_thread and self._cam_thread.is_alive():
+            self._cam_thread.join(timeout=1.0)
+            if self._cam_thread.is_alive():
+                print("警告：图像捕获线程未能及时结束。")
+        self._cam_thread = None
+
+        if self._pause_aim_event:
+            self._pause_aim_event.clear()
+
+        self.status["message"] = "视频流已关闭"
+        self._notify_status_callbacks()
+
     def start_detect_service(self):
         if not self.status["connected"]:
             self.status["message"] = "未连接，无法开启检测服务"
