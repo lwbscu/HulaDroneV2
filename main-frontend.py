@@ -88,6 +88,15 @@ class HulaDroneGUI_CTk_Enhanced:
         self.video_stream_show_distance_frame = False # 是否在视频流中显示单目测距结果
         self.laser_aim_target = False # 激光是否瞄准目标
         self.red_circle_laser_tracking = False
+        self.speed_level = 0
+        self.speed_level_options = {
+            -3: ("慢三档", 0.45),
+            -2: ("慢二档", 0.60),
+            -1: ("慢一档", 0.80),
+             0: ("默认速度", 1.00),
+             1: ("快一档", 1.20),
+             2: ("快二档", 1.40),
+        }
         self.image_raw_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.image_update_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.frame_queue = queue.Queue(maxsize=1)  # 只保存最新检测帧
@@ -227,7 +236,7 @@ class HulaDroneGUI_CTk_Enhanced:
         self.control_frame.rowconfigure(0, weight=0)  # 连接状态UI (已有信息复制过来)
         self.control_frame.rowconfigure(1, weight=0)  # 飞行控制UI
         self.control_frame.rowconfigure(2, weight=0)  # 功能控制UI
-        self.control_frame.rowconfigure(3, weight=0)  # 自动飞行UI
+        self.control_frame.rowconfigure(3, weight=0)  # 速度限制UI
         
         # 创建右侧显示区域
         self.display_frame = ctk.CTkFrame(self.main_interface_frame)
@@ -245,7 +254,7 @@ class HulaDroneGUI_CTk_Enhanced:
         self.setup_connection_info_ui(self.control_frame)
         self.setup_laser_video_ui(self.control_frame)
         self.setup_flight_control_ui(self.control_frame)
-        self.setup_auto_flight_ui(self.control_frame)
+        self.setup_speed_limit_ui(self.control_frame)
         self._bind_control_scrollwheel()
         
         # 2. 显示区域
@@ -569,7 +578,7 @@ class HulaDroneGUI_CTk_Enhanced:
                                         alpha=0.95, label="理想轨迹")
         self.path_glow, = self.ax.plot([], [], [], linewidth=0.0, color="#0077ff",
                                        alpha=0.0, solid_capstyle="round")
-        self.path_line, = self.ax.plot([], [], [], linewidth=2.0, color="#4b1f8f",
+        self.path_line, = self.ax.plot([], [], [], linewidth=2.2, color="#32105f",
                                        alpha=0.98, solid_capstyle="round", label="实际轨迹")
         self.path_points = self.ax.scatter([], [], [], s=0, color="#f8ffff",
                                            edgecolors="#00d4ff", linewidths=0.0,
@@ -1555,37 +1564,45 @@ class HulaDroneGUI_CTk_Enhanced:
             height=28, width=80, font=self.font_small, corner_radius=self.corner_radius
         ).grid(row=0, column=4, sticky="e")
 
-    ## --- 自动飞行 UI ---
-    def setup_auto_flight_ui(self, parent_container):
-        frame = self._create_section_frame(parent_container, "自动飞行", 3)
-        frame.grid_columnconfigure(2, weight=1) # Button expands
+    ## --- 速度限制 UI ---
+    def setup_speed_limit_ui(self, parent_container):
+        frame = self._create_section_frame(parent_container, "速度限制", 3)
+        frame.grid_columnconfigure(0, weight=1)
 
-        # 四方飞行
-        ctk.CTkLabel(frame, text="边长:", font=self.font_main).grid(row=0, column=0, padx=(self.padding,0), pady=self.padding, sticky="e")
-        self.side_length_entry = ctk.CTkEntry(frame, width=80, font=self.font_main, corner_radius=self.corner_radius); self.side_length_entry.insert(0, "100")
-        self.side_length_entry.grid(row=0, column=1, padx=5, pady=self.padding)
+        self.speed_limit_label = ctk.CTkLabel(
+            frame,
+            text="当前速度: 默认速度 (1.00x)",
+            font=self.font_main,
+            anchor="w",
+        )
+        self.speed_limit_label.grid(
+            row=0,
+            column=0,
+            padx=self.padding,
+            pady=(self.padding, 4),
+            sticky="ew",
+        )
 
-        # Radio buttons in their own sub-frame for better grouping
-        # radio_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        # radio_frame.grid(row=0, column=2, padx=self.padding, pady=self.padding/2, sticky="ew")
+        buttons_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        buttons_frame.grid(row=1, column=0, padx=self.padding, pady=(0, self.padding), sticky="ew")
+        for column_index in range(6):
+            buttons_frame.grid_columnconfigure(column_index, weight=1)
 
-        self.unit_var = tk.StringVar(value="distance")
-        # ctk.CTkRadioButton(radio_frame, text="时间 (s)", variable=self.unit_var, value="time", font=self.font_main, corner_radius=self.corner_radius).pack(side="left", padx=(0,10))
-        # ctk.CTkRadioButton(radio_frame, text="距离 (cm)", variable=self.unit_var, value="distance", font=self.font_main, corner_radius=self.corner_radius).pack(side="left")
+        self.speed_limit_buttons = {}
+        for column_index, level in enumerate([-3, -2, -1, 0, 1, 2]):
+            label, _ = self.speed_level_options[level]
+            button = ctk.CTkButton(
+                buttons_frame,
+                text=label,
+                command=lambda selected_level=level: self.action_set_speed_level(selected_level),
+                height=32,
+                font=self.font_small,
+                corner_radius=self.corner_radius,
+            )
+            button.grid(row=0, column=column_index, padx=3, pady=2, sticky="ew")
+            self.speed_limit_buttons[level] = button
 
-        ctk.CTkButton(frame, text="飞行正方形路径", command=self.action_square_flight, height=self.button_height, font=self.font_main, corner_radius=self.corner_radius).grid(row=0, column=2, padx=(0, self.padding), pady=self.padding, sticky="ew")
-
-        # 瞄准飞行
-        ctk.CTkLabel(frame, text="瞄准时间：", font=self.font_main).grid(row=1, column=0, padx=(self.padding,0), pady=self.padding, sticky="e")
-        self.aim_time_entry = ctk.CTkEntry(frame, width=80, font=self.font_main, corner_radius=self.corner_radius); self.aim_time_entry.insert(0, "10")
-        self.aim_time_entry.grid(row=1, column=1, padx=5, pady=self.padding)
-
-        ctk.CTkButton(frame, text="飞行正方形路径（瞄准）", command=self.action_square_aim_flight, height=self.button_height, font=self.font_main, corner_radius=self.corner_radius).grid(row=1, column=2, padx=(0, self.padding), pady=self.padding, sticky="ew")
-
-        ctk.CTkButton(
-            frame, text="安全闭环调试（20cm）", command=self.action_safe_loop_debug,
-            height=self.button_height, font=self.font_main, corner_radius=self.corner_radius
-        ).grid(row=2, column=0, columnspan=3, padx=self.padding, pady=self.padding, sticky="ew")
+        self._update_speed_limit_ui(0, 1.0, "默认速度")
 
     # --- 飞行路径绘制相关方法 ---
     def update_flight_path(self, x, y, z, heading=None):
@@ -1858,6 +1875,40 @@ class HulaDroneGUI_CTk_Enhanced:
     def _run_drone_action_in_thread(self, action_func, *args, **kwargs):
         thread = threading.Thread(target=action_func, args=args, kwargs=kwargs, daemon=True)
         thread.start()
+
+    def _update_speed_limit_ui(self, level=None, multiplier=None, label=None):
+        if level is None:
+            level = self.speed_level
+        level = max(-3, min(2, int(level)))
+        if multiplier is None or label is None:
+            label, multiplier = self.speed_level_options.get(level, self.speed_level_options[0])
+
+        self.speed_level = level
+        if hasattr(self, "speed_limit_label") and self.speed_limit_label.winfo_exists():
+            self.speed_limit_label.configure(text=f"当前速度: {label} ({float(multiplier):.2f}x)")
+
+        if hasattr(self, "speed_limit_buttons"):
+            for button_level, button in self.speed_limit_buttons.items():
+                try:
+                    if not button.winfo_exists():
+                        continue
+                    if button_level == level:
+                        button.configure(fg_color=self._get_status_color("green"))
+                    else:
+                        button.configure(fg_color="#1f538d")
+                except Exception:
+                    pass
+
+    def action_set_speed_level(self, level):
+        level = max(-3, min(2, int(level)))
+        label, multiplier = self.speed_level_options[level]
+        self._update_speed_limit_ui(level, multiplier, label)
+        if hasattr(self, "main_status_label") and self.main_status_label.winfo_exists():
+            self.main_status_label.configure(
+                text=f"状态: 速度限制设置为{label} ({multiplier:.2f}x)",
+                text_color=self._get_status_color("orange"),
+            )
+        self._run_drone_action_in_thread(self.drone.set_speed_level, level)
 
     def action_connect_drone(self):
         ip_text = self.ip_entry.get().strip()
@@ -2284,6 +2335,11 @@ class HulaDroneGUI_CTk_Enhanced:
                     self.main_position_label.configure(text=pos_str, text_color=self._get_status_color("blue_text"))
                 if hasattr(self, 'main_heading_label') and self.main_heading_label.winfo_exists():
                     self.main_heading_label.configure(text=heading_text, text_color=self._get_status_color("blue_text"))
+                if hasattr(self, "speed_limit_label") and self.speed_limit_label.winfo_exists():
+                    speed_level = int(drone_status.get("speed_level", self.speed_level))
+                    speed_multiplier = float(drone_status.get("speed_multiplier", self.speed_level_options.get(speed_level, ("", 1.0))[1]))
+                    speed_label = drone_status.get("speed_label", self.speed_level_options.get(speed_level, ("默认速度", 1.0))[0])
+                    self._update_speed_limit_ui(speed_level, speed_multiplier, speed_label)
                 
                 # Update flight path if we have valid position data
                 if loc[0] != "N/A" and loc[1] != "N/A" and height != "N/A":

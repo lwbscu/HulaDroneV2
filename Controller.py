@@ -79,6 +79,8 @@ class Controller:
     running: bool = False
     control_interval: float = 0.1  # Seconds
     control_tolerance: int = 5
+    speed_level: int = 0
+    speed_multiplier: float = 1.0
     _lock: threading.Lock = None
     _pause_event: threading.Event = None
     # Initialize JSON data storage
@@ -98,6 +100,26 @@ class Controller:
         # 初始化回调列表和监视锁
         self._target_reached_callbacks = []
         self._target_monitor_lock = threading.Lock()
+        self.set_speed_level(self.speed_level)
+
+    def set_speed_level(self, level: int) -> float:
+        """Set PID output speed level from -3 to +2.
+
+        Level 0 keeps the previous/default control behavior.
+        Negative levels slow the controller down; positive levels speed it up.
+        """
+        speed_table = {
+            -3: 0.45,
+            -2: 0.60,
+            -1: 0.80,
+             0: 1.00,
+             1: 1.20,
+             2: 1.40,
+        }
+        level = max(-3, min(2, int(level)))
+        self.speed_level = level
+        self.speed_multiplier = speed_table[level]
+        return self.speed_multiplier
         
 
     def __calculate_location_delta(self, current: list, desired: list) -> list:
@@ -296,6 +318,8 @@ class Controller:
 
             with self._lock:                            # Acquire target location safely
                 target_location = self.target_location
+                speed_level = self.speed_level
+                speed_multiplier = self.speed_multiplier
 
             # Acquire x, y,z error and transform x, y error to local frame using current heading
             delta_coordinate = self.__calculate_location_delta(current_location, target_location)
@@ -307,6 +331,9 @@ class Controller:
             dx = self.pid_x.compute(dx_local)
             dy = self.pid_y.compute(dy_local)
             dz = self.pid_z.compute(dz)
+            dx *= speed_multiplier
+            dy *= speed_multiplier
+            dz *= speed_multiplier
 
             # Tolerance in cm
             target_notified = False
@@ -341,7 +368,9 @@ class Controller:
                 'dy_local': dy_local,
                 'dx': dx,
                 'dy': dy,
-                'dz': dz
+                'dz': dz,
+                'speed_level': speed_level,
+                'speed_multiplier': speed_multiplier
             }
             self.json_data.append(epoch_data)
 
