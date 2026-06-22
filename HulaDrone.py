@@ -10,6 +10,7 @@ from typing import Optional
 # 假设 Controller.py 和 PidCalculator 在同一目录下或可被导入
 from Controller import Controller, PidCalculator
 from TargetDetectorAruco import TargetDetectorAruco # 假设有一个目标检测模块
+from MonocularDistanceEstimator import MonocularDistanceEstimator
 
 class HulaDrone:
     def __init__(self):
@@ -27,23 +28,172 @@ class HulaDrone:
         }
         self.controller: Optional[Controller] = None
         self.target_detector: Optional[TargetDetectorAruco] = None
+        self.distance_estimator: Optional[MonocularDistanceEstimator] = None
         self._initial_heading_offset: int = 0
 
         self._query_thread = threading.Thread(target=self._query_loop, daemon=True)
         self._control_thread: Optional[threading.Thread] = None # 将在Controller实例化后创建
         self._cam_thread: Optional[threading.Thread] = None # 将在图像流捕获时创建
         self._aim_thread: Optional[threading.Thread] = None # 将在TargetDetectorAruco实例化后（见start_image_stream）创建
+        self._red_circle_track_thread: Optional[threading.Thread] = None
+        self._red_circle_center_thread: Optional[threading.Thread] = None
         self.flag_cam_detect = False # 用于标记是否开启了目标检测（见_capture_image_loop）
+        self.flag_monocular_distance = False # 用于标记是否开启单目视觉测距
+        self.flag_red_circle_laser_track = False
+        self.flag_red_circle_centering = False
 
         self._query_ready: bool = False
         self._cam_ready: bool = False
         self._aim_ready: bool = False # 激光瞄准状态
+        self._red_circle_track_ready: bool = True
+        self._red_circle_center_ready: bool = True
         self._pause_aim_event = threading.Event() # 用于控制激光瞄准的暂停（clear）和恢复（set）
+        self._red_circle_track_event = threading.Event()
+        self._red_circle_track_event.clear()
+        self._red_circle_center_event = threading.Event()
+        self._red_circle_center_event.clear()
         self._aim_adjust_lock = threading.Lock()
+        self._red_circle_adjust_lock = threading.Lock()
+        self._red_circle_center_lock = threading.Lock()
         self.aim_pitch_offset_degrees = -2.0
+        self._red_circle_laser_is_on = False
+        self._red_circle_last_adjust_time = 0.0
+        self._red_circle_last_center_time = 0.0
+        self._red_circle_hit_confirm_count = 0
+        self.red_circle_laser_offset_x_px = 0.0
+        self.red_circle_laser_offset_y_px = 0.0
         self._connect_lock = threading.Lock()
 
         self._status_callbacks = [] # 列表，用于存储注册的回调函数
+
+    def set_monocular_distance_enabled(self, enabled: bool):
+        """开启或关闭单目视觉测距叠加。"""
+        self.flag_monocular_distance = bool(enabled)
+        if enabled and self.distance_estimator is None:
+            self.distance_estimator = MonocularDistanceEstimator()
+
+        self.status["message"] = "单目视觉测距已开启" if enabled else "单目视觉测距已关闭"
+        self._notify_status_callbacks()
+
+    def set_red_circle_laser_tracking_enabled(self, enabled: bool):
+        """开启或关闭红色圆形纸片的激光自动跟踪。"""
+        if enabled:
+            if not self.status["connected"]:
+                self.status["message"] = "未连接，无法开启红圆激光跟踪"
+                self._notify_status_callbacks()
+                return False
+            if not self.status["cam_stream"]:
+                self.status["message"] = "未开启视频流，无法开启红圆激光跟踪"
+                self._notify_status_callbacks()
+                return False
+            if self.distance_estimator is None:
+                self.distance_estimator = MonocularDistanceEstimator()
+            self.distance_estimator.set_laser_aim_offset(
+                self.red_circle_laser_offset_x_px,
+                self.red_circle_laser_offset_y_px,
+            )
+
+            self._set_red_circle_laser(False, force=True)
+            self.flag_monocular_distance = True
+            self.flag_red_circle_laser_track = True
+            if not self._red_circle_track_thread or not self._red_circle_track_thread.is_alive():
+                self._red_circle_track_ready = True
+                self._red_circle_track_thread = threading.Thread(
+                    target=self._red_circle_laser_track_loop,
+                    daemon=True,
+                )
+                self._red_circle_track_thread.start()
+            self._red_circle_track_event.set()
+            self.status["message"] = "红圆激光跟踪已开启"
+        else:
+            self.flag_red_circle_laser_track = False
+            self._red_circle_track_event.clear()
+            self._set_red_circle_laser(False, force=True)
+            self.status["message"] = "红圆激光跟踪已关闭"
+
+        self._notify_status_callbacks()
+        return True
+
+    def set_red_circle_centering_enabled(self, enabled: bool):
+        """Enable or disable automatic red circle centering in the video frame."""
+        if enabled:
+            if not self.status["connected"]:
+                self.status["message"] = "未连接，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if not self.status["cam_stream"]:
+                self.status["message"] = "未开启视频流，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if not self.status.get("takeoff", False):
+                self.status["message"] = "未起飞，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if self.distance_estimator is None:
+                self.distance_estimator = MonocularDistanceEstimator()
+
+            self.flag_monocular_distance = True
+            self.flag_red_circle_centering = True
+            if not self._red_circle_center_thread or not self._red_circle_center_thread.is_alive():
+                self._red_circle_center_ready = True
+                self._red_circle_center_thread = threading.Thread(
+                    target=self._red_circle_center_loop,
+                    daemon=True,
+                )
+                self._red_circle_center_thread.start()
+            self._red_circle_center_event.set()
+            self.status["message"] = "红圆自动居中已开启"
+        else:
+            self.flag_red_circle_centering = False
+            self._red_circle_center_event.clear()
+            self.status["message"] = "红圆自动居中已关闭"
+
+        self._notify_status_callbacks()
+        return True
+
+    def set_monocular_reference_size(self, target_diameter_cm, _unused_height_cm=None):
+        """设置单目测距使用的红色圆形纸片直径。"""
+        if self.distance_estimator is None:
+            self.distance_estimator = MonocularDistanceEstimator()
+        self.distance_estimator.set_reference_size(target_diameter_cm)
+        self.status["message"] = (
+            f"红色圆形纸片直径已设置: "
+            f"{self.distance_estimator.target_diameter_cm:.1f}cm"
+        )
+        self._notify_status_callbacks()
+
+    def set_red_circle_laser_offset(self, offset_x_px, offset_y_px):
+        """设置红圆跟踪时的激光落点相对画面中心偏移。"""
+        self.red_circle_laser_offset_x_px = float(offset_x_px)
+        self.red_circle_laser_offset_y_px = float(offset_y_px)
+        if self.distance_estimator is None:
+            self.distance_estimator = MonocularDistanceEstimator()
+        self.distance_estimator.set_laser_aim_offset(
+            self.red_circle_laser_offset_x_px,
+            self.red_circle_laser_offset_y_px,
+        )
+        self.status["message"] = (
+            f"红圆激光偏移已设置: "
+            f"X {self.red_circle_laser_offset_x_px:+.0f}px, "
+            f"Y {self.red_circle_laser_offset_y_px:+.0f}px"
+        )
+        self._notify_status_callbacks()
+
+    def _set_red_circle_laser(self, enable: bool, force: bool = False):
+        if not self.status["connected"]:
+            return False
+        if not force and enable == self._red_circle_laser_is_on:
+            return True
+        try:
+            if enable:
+                self.instance.plane_fly_generating(4, 10, 100)
+            else:
+                self.instance.plane_fly_generating(5, 0, 0)
+            self._red_circle_laser_is_on = enable
+            return True
+        except Exception as e:
+            print(f"红圆激光控制失败: {e}")
+            return False
 
     def register_status_callback(self, callback):
         """注册一个回调函数，当无人机状态更新时调用。
@@ -774,6 +924,7 @@ class HulaDrone:
         else:
             self.instance.plane_fly_generating(5, 0, 0)
             self.status["message"] = "激光已关闭"
+        self._red_circle_laser_is_on = enable
         self._notify_status_callbacks()
 
     def execute_fly_plan(self, fly_plan, completion_callback=None, step_callback=None, post_step_callback=None):
@@ -918,13 +1069,23 @@ class HulaDrone:
                             queue_image.get_nowait() # 如果队列满，丢弃最旧的图像
                         queue_image.put(image) # 将图像放入队列
 
-                        # 进行目标检测
+                        # 进行目标检测或单目测距，并将结果叠加到同一帧
+                        processed_frame = None
                         if self.flag_cam_detect and self.target_detector:
-                            frame = self.target_detector.get_target_frame(image) # 检测目标
-                            if frame is not None and queue_frame is not None:
-                                if queue_frame.full():
-                                    queue_frame.get_nowait() # 如果队列满，丢弃最旧的检测帧
-                                queue_frame.put(frame) # 将检测结果放入队列
+                            processed_frame = self.target_detector.get_target_frame(image) # 检测目标
+
+                        if self.flag_monocular_distance:
+                            if self.distance_estimator is None:
+                                self.distance_estimator = MonocularDistanceEstimator()
+                            processed_frame = self.distance_estimator.get_distance_frame(
+                                image,
+                                processed_frame,
+                            )
+
+                        if processed_frame is not None and queue_frame is not None:
+                            if queue_frame.full():
+                                queue_frame.get_nowait() # 如果队列满，丢弃最旧的检测帧
+                            queue_frame.put(processed_frame) # 将处理结果放入队列
                                 
                 except Exception as e:
                     print(f"捕获图像时出错: {e}")
@@ -954,6 +1115,182 @@ class HulaDrone:
                     print(f"激光瞄准时出错: {e}")
                     break
             time.sleep(0.3)
+
+    def _red_circle_center_loop(self):
+        while self._red_circle_center_ready:
+            self._red_circle_center_event.wait()
+            if not self.flag_red_circle_centering:
+                time.sleep(0.2)
+                continue
+
+            if (
+                not self.status["connected"]
+                or not self.status["cam_stream"]
+                or not self.status.get("takeoff", False)
+            ):
+                time.sleep(0.5)
+                continue
+
+            estimator = self.distance_estimator
+            if estimator is None:
+                time.sleep(0.2)
+                continue
+
+            info = estimator.current_distance_info or {}
+            if not info.get("detected"):
+                self.status["message"] = "红圆自动居中：未检测到红色圆片"
+                self._notify_status_callbacks()
+                time.sleep(0.3)
+                continue
+
+            frame_center = info.get("frame_center")
+            target_center = info.get("center")
+            if not frame_center or not target_center:
+                time.sleep(0.2)
+                continue
+
+            frame_center_x, frame_center_y = frame_center
+            target_x, target_y = target_center
+            offset_x_px = float(target_x) - float(frame_center_x)
+            offset_y_px = float(target_y) - float(frame_center_y)
+            frame_half_width = max(1.0, float(frame_center_x))
+            frame_half_height = max(1.0, float(frame_center_y))
+            offset_x_ratio = offset_x_px / frame_half_width
+            offset_y_ratio = offset_y_px / frame_half_height
+            radius_px = max(1.0, float(info.get("radius_px", 1.0)))
+            center_tolerance_px = max(14.0, min(42.0, radius_px * 0.35))
+
+            now = time.time()
+            if now - self._red_circle_last_center_time < 0.8:
+                time.sleep(0.1)
+                continue
+
+            lateral_step_cm = 0
+            pitch_step = 0
+            if abs(offset_x_px) > center_tolerance_px:
+                lateral_step_cm = max(-12, min(12, int(round(offset_x_ratio * 18))))
+            if abs(offset_y_px) > center_tolerance_px:
+                pitch_step = max(-3, min(3, int(round(-offset_y_ratio * 7))))
+
+            if lateral_step_cm == 0 and pitch_step == 0:
+                self.status["message"] = "红圆自动居中：红色圆片已在画面中心"
+                self._notify_status_callbacks()
+                time.sleep(0.2)
+                continue
+
+            try:
+                with self._red_circle_center_lock:
+                    self._set_red_circle_laser(False)
+
+                    if pitch_step != 0:
+                        self.set_camera_relative_pitch(pitch_step)
+
+                    if lateral_step_cm != 0:
+                        self.move_to_local_target(lateral_step_cm, 0, 0)
+
+                    self._red_circle_last_center_time = time.time()
+                    self.status["message"] = (
+                        "红圆自动居中："
+                        f"左右 {lateral_step_cm:+d}cm，俯仰 {pitch_step:+d}°"
+                    )
+                    self._notify_status_callbacks()
+            except Exception as e:
+                print(f"红圆自动居中调整失败: {e}")
+
+            time.sleep(0.1)
+
+    def _red_circle_laser_track_loop(self):
+        while self._red_circle_track_ready:
+            self._red_circle_track_event.wait()
+            if not self.flag_red_circle_laser_track:
+                time.sleep(0.2)
+                continue
+
+            if not self.status["connected"] or not self.status["cam_stream"]:
+                self._set_red_circle_laser(False)
+                time.sleep(0.5)
+                continue
+
+            estimator = self.distance_estimator
+            if estimator is None:
+                time.sleep(0.2)
+                continue
+
+            info = estimator.current_distance_info or {}
+            if not info.get("detected"):
+                self._red_circle_hit_confirm_count = 0
+                self._set_red_circle_laser(False)
+                self.status["message"] = "红圆激光跟踪：未检测到红色圆片"
+                self._notify_status_callbacks()
+                time.sleep(0.3)
+                continue
+
+            offset_x_ratio = float(info.get("offset_x_ratio", 0.0))
+            offset_y_ratio = float(info.get("offset_y_ratio", 0.0))
+            offset_x_px = float(info.get("offset_x_px", 0.0))
+            offset_y_px = float(info.get("offset_y_px", 0.0))
+            radius_px = max(1.0, float(info.get("radius_px", 1.0)))
+            laser_on_target = bool(info.get("laser_spot_on_target", False))
+            laser_red_coverage = float(info.get("laser_red_coverage", 0.0))
+            laser_margin_px = float(info.get("laser_hit_margin_px", -999.0))
+            aim_tolerance_px = max(8.0, min(26.0, radius_px * 0.45))
+            if laser_on_target:
+                self._red_circle_hit_confirm_count = min(
+                    self._red_circle_hit_confirm_count + 1,
+                    4,
+                )
+            else:
+                self._red_circle_hit_confirm_count = 0
+            stable_hit = self._red_circle_hit_confirm_count >= 2
+
+            now = time.time()
+            pitch_step = 0
+            yaw_step = 0
+            if abs(offset_y_px) > aim_tolerance_px:
+                pitch_step = max(-3, min(3, int(round(-offset_y_ratio * 7))))
+            if abs(offset_x_px) > aim_tolerance_px:
+                yaw_step = max(-4, min(4, int(round(offset_x_ratio * 8))))
+            laser_confirmed = stable_hit and pitch_step == 0 and yaw_step == 0
+            self._set_red_circle_laser(laser_confirmed)
+
+            if now - self._red_circle_last_adjust_time < 0.45:
+                time.sleep(0.1)
+                continue
+
+            if pitch_step == 0 and yaw_step == 0:
+                self.status["message"] = (
+                    "红圆激光跟踪：激光落点已在红纸片内"
+                    if laser_confirmed
+                    else "红圆激光跟踪：等待激光落点稳定命中红纸片"
+                )
+                self._notify_status_callbacks()
+                time.sleep(0.1)
+                continue
+
+            self._set_red_circle_laser(False)
+            self.status["message"] = (
+                "红圆激光跟踪：正在对准，"
+                f"红色覆盖 {laser_red_coverage:.0%}，余量 {laser_margin_px:+.0f}px"
+            )
+            self._notify_status_callbacks()
+
+            try:
+                with self._red_circle_adjust_lock:
+                    if pitch_step != 0:
+                        self.set_camera_relative_pitch(pitch_step)
+
+                    if yaw_step != 0:
+                        if self.status.get("takeoff", False):
+                            self.set_rotation(yaw_step)
+                        else:
+                            self.status["message"] = "红圆激光跟踪：未起飞，仅调整相机俯仰"
+                            self._notify_status_callbacks()
+                    self._red_circle_last_adjust_time = time.time()
+            except Exception as e:
+                print(f"红圆激光跟踪调整失败: {e}")
+                self._set_red_circle_laser(False)
+
+            time.sleep(0.1)
 
     def start_image_stream(self, queue_image: queue.Queue, queue_frame: queue.Queue): # 改名以示区分，此方法仅打开流
         if not self.status["connected"]:
@@ -1021,6 +1358,14 @@ class HulaDrone:
         self.status["message"] = "正在退出..."
         self._notify_status_callbacks()
 
+        self.flag_red_circle_laser_track = False
+        self.flag_red_circle_centering = False
+        self._red_circle_track_ready = False
+        self._red_circle_center_ready = False
+        self._red_circle_track_event.set()
+        self._red_circle_center_event.set()
+        self._set_red_circle_laser(False, force=True)
+
         # 确保清理飞行计划
         self._cleanup_fly_plan()
 
@@ -1066,9 +1411,21 @@ class HulaDrone:
             if self._aim_thread.is_alive():
                 print("警告：激光瞄准线程未能及时结束。")
 
+        if self._red_circle_track_thread and self._red_circle_track_thread.is_alive():
+            print("等待红圆激光跟踪线程结束...")
+            self._red_circle_track_thread.join(timeout=1.0)
+            if self._red_circle_track_thread.is_alive():
+                print("警告：红圆激光跟踪线程未能及时结束。")
+
         # SDK 是否有显式的断开连接方法？
         # if hasattr(self.instance, 'disconnect'):
         # self.instance.disconnect()
+
+        if self._red_circle_center_thread and self._red_circle_center_thread.is_alive():
+            print("等待红圆自动居中线程结束...")
+            self._red_circle_center_thread.join(timeout=1.0)
+            if self._red_circle_center_thread.is_alive():
+                print("警告：红圆自动居中线程未能及时结束。")
 
         self.status["connected"] = False
         self.status["message"] = "已安全退出并断开连接。"

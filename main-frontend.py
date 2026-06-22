@@ -53,8 +53,8 @@ class HulaDroneGUI_CTk_Enhanced:
         self.corner_radius = 8
         self.padding = 10
         self.button_height = 35
-        self.image_width = 1280
-        self.image_height = 720
+        self.image_width = 640
+        self.image_height = 360
 
         # --- 初始化无人机实例和状态 ---
         self.drone = HulaDrone()
@@ -85,7 +85,10 @@ class HulaDroneGUI_CTk_Enhanced:
         self.path_interaction_cids = []
         self.video_stream_active = False
         self.video_stream_show_target_frame = False # 是否在视频流中显示打靶目标框
+        self.video_stream_show_distance_frame = False # 是否在视频流中显示单目测距结果
         self.laser_aim_target = False # 激光是否瞄准目标
+        self.red_circle_laser_tracking = False
+        self.red_circle_centering = False
         self.image_raw_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.image_update_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.frame_queue = queue.Queue(maxsize=1)  # 只保存最新检测帧
@@ -104,6 +107,13 @@ class HulaDroneGUI_CTk_Enhanced:
         # # Track all scheduled callbacks and animations
         self.scheduled_callbacks = []
         self.cleanup_in_progress = False
+        self._pending_status_update = None
+        self._status_update_after_id = None
+        self._status_update_interval_ms = 120
+        self._last_path_ui_update = 0.0
+        self._path_ui_interval_s = 0.33
+        self._last_path_sample = None
+        self._last_video_status_update = 0.0
 
         # self.show_main_interface()  # TODO：测试用
         
@@ -204,16 +214,21 @@ class HulaDroneGUI_CTk_Enhanced:
         self.main_interface_frame.columnconfigure(1, weight=2)  # 显示区域
         self.main_interface_frame.rowconfigure(0, weight=1)     # 单行布局
         
-        # 创建左侧控制区域
-        self.control_frame = ctk.CTkFrame(self.main_interface_frame)
+        # 创建左侧可滚动控制区域，避免窗口高度不足时底部功能被遮挡
+        self.control_frame = ctk.CTkScrollableFrame(
+            self.main_interface_frame,
+            width=690,
+            height=850,
+            corner_radius=self.corner_radius,
+        )
         self.control_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=5)
         
         # 配置控制区域网格
         self.control_frame.columnconfigure(0, weight=1)
         self.control_frame.rowconfigure(0, weight=0)  # 连接状态UI (已有信息复制过来)
-        self.control_frame.rowconfigure(1, weight=1)  # 飞行控制UI
-        self.control_frame.rowconfigure(2, weight=1)  # 正方形飞行UI
-        self.control_frame.rowconfigure(3, weight=1)  # 附件控制UI
+        self.control_frame.rowconfigure(1, weight=0)  # 飞行控制UI
+        self.control_frame.rowconfigure(2, weight=0)  # 功能控制UI
+        self.control_frame.rowconfigure(3, weight=0)  # 自动飞行UI
         
         # 创建右侧显示区域
         self.display_frame = ctk.CTkFrame(self.main_interface_frame)
@@ -229,9 +244,10 @@ class HulaDroneGUI_CTk_Enhanced:
         # 1. 控制区域
         # 连接状态信息复制到新位置
         self.setup_connection_info_ui(self.control_frame)
-        self.setup_flight_control_ui(self.control_frame)
         self.setup_laser_video_ui(self.control_frame)
+        self.setup_flight_control_ui(self.control_frame)
         self.setup_auto_flight_ui(self.control_frame)
+        self._bind_control_scrollwheel()
         
         # 2. 显示区域
         self.setup_display_ui()
@@ -1068,11 +1084,11 @@ class HulaDroneGUI_CTk_Enhanced:
     def _create_section_frame(self, parent, title_text, row, column=0, columnspan=1):
         """创建带标题的区域框架"""
         section_container = ctk.CTkFrame(parent, fg_color="transparent")
-        section_container.grid(row=row, column=column, columnspan=columnspan, sticky="nsew", padx=self.padding, pady=self.padding)
+        section_container.grid(row=row, column=column, columnspan=columnspan, sticky="ew", padx=self.padding, pady=self.padding)
         
         section_container.columnconfigure(0, weight=1)
         section_container.rowconfigure(0, weight=0)  # 标题
-        section_container.rowconfigure(1, weight=1)  # 内容
+        section_container.rowconfigure(1, weight=0)  # 内容
         
         # 标题
         section_title = ctk.CTkLabel(section_container, text=title_text, font=self.font_title, anchor="w")
@@ -1080,9 +1096,26 @@ class HulaDroneGUI_CTk_Enhanced:
         
         # 内容框架
         frame = ctk.CTkFrame(section_container, corner_radius=self.corner_radius)
-        frame.grid(row=1, column=0, sticky="nsew")
+        frame.grid(row=1, column=0, sticky="ew")
         
         return frame
+
+    def _bind_control_scrollwheel(self):
+        """Bind mouse wheel events to the scrollable control panel."""
+        if not hasattr(self.control_frame, "_parent_canvas"):
+            return
+
+        canvas = self.control_frame._parent_canvas
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(-int(event.delta / 120), "units")
+
+        def bind_recursive(widget):
+            widget.bind("<MouseWheel>", on_mousewheel, add="+")
+            for child in widget.winfo_children():
+                bind_recursive(child)
+
+        bind_recursive(self.control_frame)
 
     ## --- 连接与状态 UI ---
     def setup_connection_info_ui(self, parent_container):
@@ -1109,7 +1142,7 @@ class HulaDroneGUI_CTk_Enhanced:
 
     ## --- 飞行控制 UI ---
     def setup_flight_control_ui(self, parent_container):
-        frame = self._create_section_frame(parent_container, "飞行控制", 1)
+        frame = self._create_section_frame(parent_container, "飞行控制", 2)
         frame.grid_columnconfigure((1,3,5), weight=0) # Entries fixed width
         frame.grid_columnconfigure(6, weight=1) # Move button can expand
 
@@ -1414,7 +1447,7 @@ class HulaDroneGUI_CTk_Enhanced:
 
     ## --- 激光与视频流 UI ---
     def setup_laser_video_ui(self, parent_container):
-        frame = self._create_section_frame(parent_container, "功能控制", 2)
+        frame = self._create_section_frame(parent_container, "功能控制", 1)
         frame.grid_columnconfigure(1, weight=1) # Stream button expands
 
         self.laser_var = tk.BooleanVar(value=False)
@@ -1428,6 +1461,88 @@ class HulaDroneGUI_CTk_Enhanced:
             frame, text="开启视频流", command=self.action_capture_image_stream,
             height=self.button_height, font=self.font_main, corner_radius=self.corner_radius
         ).grid(row=0, column=1, padx=(0, self.padding), pady=self.padding, sticky="ew")
+
+        self.monocular_distance_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            frame, text="单目测距", variable=self.monocular_distance_var,
+            command=self.action_toggle_monocular_distance,
+            onvalue=True, offvalue=False, font=self.font_main,
+            corner_radius=self.corner_radius, border_width=2
+        ).grid(row=1, column=0, padx=self.padding, pady=(0, self.padding), sticky="w")
+
+        distance_config_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        distance_config_frame.grid(row=1, column=1, padx=(0, self.padding), pady=(0, self.padding), sticky="ew")
+        distance_config_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(distance_config_frame, text="红色圆片直径(cm)", font=self.font_small).grid(row=0, column=0, padx=(0, 5), sticky="e")
+        self.distance_diameter_entry = ctk.CTkEntry(
+            distance_config_frame, width=70, font=self.font_small,
+            corner_radius=self.corner_radius
+        )
+        self.distance_diameter_entry.insert(0, "10")
+        self.distance_diameter_entry.grid(row=0, column=1, padx=(0, 10), sticky="ew")
+
+        ctk.CTkButton(
+            distance_config_frame, text="应用", command=self.action_apply_monocular_reference,
+            height=28, width=60, font=self.font_small, corner_radius=self.corner_radius
+        ).grid(row=0, column=2, sticky="e")
+
+        self.red_circle_track_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            frame, text="红圆激光跟踪", variable=self.red_circle_track_var,
+            command=self.action_toggle_red_circle_laser_tracking,
+            onvalue=True, offvalue=False, font=self.font_main,
+            corner_radius=self.corner_radius, border_width=2
+        ).grid(row=2, column=0, padx=self.padding, pady=(0, self.padding), sticky="w")
+
+        self.red_circle_track_label = ctk.CTkLabel(
+            frame,
+            text="激光点自动对准红圆圆心",
+            font=self.font_small,
+            anchor="w"
+        )
+        self.red_circle_track_label.grid(row=2, column=1, padx=(0, self.padding), pady=(0, self.padding), sticky="ew")
+
+        self.red_circle_center_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            frame, text="红圆自动居中", variable=self.red_circle_center_var,
+            command=self.action_toggle_red_circle_centering,
+            onvalue=True, offvalue=False, font=self.font_main,
+            corner_radius=self.corner_radius, border_width=2
+        ).grid(row=3, column=0, padx=self.padding, pady=(0, self.padding), sticky="w")
+
+        self.red_circle_center_label = ctk.CTkLabel(
+            frame,
+            text="起飞后用左右平移和相机俯仰居中红圆",
+            font=self.font_small,
+            anchor="w"
+        )
+        self.red_circle_center_label.grid(row=3, column=1, padx=(0, self.padding), pady=(0, self.padding), sticky="ew")
+
+        offset_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        offset_frame.grid(row=4, column=0, columnspan=2, padx=self.padding, pady=(0, self.padding), sticky="ew")
+        offset_frame.grid_columnconfigure((1, 3), weight=1)
+
+        ctk.CTkLabel(offset_frame, text="激光偏移X(px)", font=self.font_small).grid(row=0, column=0, padx=(0, 5), sticky="e")
+        self.laser_offset_x_entry = ctk.CTkEntry(
+            offset_frame, width=70, font=self.font_small,
+            corner_radius=self.corner_radius
+        )
+        self.laser_offset_x_entry.insert(0, "0")
+        self.laser_offset_x_entry.grid(row=0, column=1, padx=(0, 10), sticky="ew")
+
+        ctk.CTkLabel(offset_frame, text="Y(px)", font=self.font_small).grid(row=0, column=2, padx=(0, 5), sticky="e")
+        self.laser_offset_y_entry = ctk.CTkEntry(
+            offset_frame, width=70, font=self.font_small,
+            corner_radius=self.corner_radius
+        )
+        self.laser_offset_y_entry.insert(0, "0")
+        self.laser_offset_y_entry.grid(row=0, column=3, padx=(0, 10), sticky="ew")
+
+        ctk.CTkButton(
+            offset_frame, text="应用偏移", command=self.action_apply_red_circle_laser_offset,
+            height=28, width=80, font=self.font_small, corner_radius=self.corner_radius
+        ).grid(row=0, column=4, sticky="e")
 
     ## --- 自动飞行 UI ---
     def setup_auto_flight_ui(self, parent_container):
@@ -1478,6 +1593,22 @@ class HulaDroneGUI_CTk_Enhanced:
             self.flight_path_data['y'].append(y)
             self.flight_path_data['z'].append(z)
             self.flight_path_data['timestamps'].append(time.time())
+
+            current_sample = (
+                round(float(x), 1),
+                round(float(y), 1),
+                round(float(z), 1),
+                round(float(heading), 1) if isinstance(heading, (int, float)) else heading,
+            )
+            now = time.time()
+            if (
+                self._last_path_sample == current_sample
+                or now - self._last_path_ui_update < self._path_ui_interval_s
+            ):
+                self._last_path_sample = current_sample
+                return
+            self._last_path_sample = current_sample
+            self._last_path_ui_update = now
 
             self._update_target_path_from_controller()
 
@@ -1610,13 +1741,19 @@ class HulaDroneGUI_CTk_Enhanced:
                             frame = cv2.resize(frame, (self.image_width, self.image_height))  # type: ignore[attr-defined]
                             # cv2.imwrite("temp_frame.jpg", frame)  # 保存临时帧用于调试
                             # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            if not self.video_stream_show_target_frame: # 如果不显示目标检测帧
+                            show_processed_frame = (
+                                self.video_stream_show_target_frame
+                                or self.video_stream_show_distance_frame
+                            )
+                            if not show_processed_frame: # 如果不显示处理后的帧
                                 self.video_img.set_data(frame)
-                            else:                                       # 进行目标检测
-                                # 显示目标框架
-                                if self.frame_queue.empty(): # 如果没有检测到目标帧
-                                    print("目标检测帧队列为空，使用原始帧")
-                                    self.main_status_label.configure(text="目标检测：未检测到目标", text_color=self._get_status_color("orange"))
+                            else:                                       # 显示视觉处理结果
+                                # 显示目标检测或单目测距处理后的帧
+                                if self.frame_queue.empty(): # 如果没有处理后的帧
+                                    now = time.time()
+                                    if now - self._last_video_status_update > 1.0:
+                                        self._last_video_status_update = now
+                                        self.main_status_label.configure(text="视觉处理：等待检测结果", text_color=self._get_status_color("orange"))
                                     self.video_img.set_data(frame)
                                 else:
                                     target_frame = self.frame_queue.get_nowait()
@@ -1626,8 +1763,10 @@ class HulaDroneGUI_CTk_Enhanced:
                                         self.video_img.set_data(target_frame)
                                     else:
                                         # 如果没有目标帧，使用原始帧
-                                        print("未获取到目标帧，使用原始帧")
-                                        self.main_status_label.configure(text="目标检测：未检测到目标", text_color=self._get_status_color("orange"))
+                                        now = time.time()
+                                        if now - self._last_video_status_update > 1.0:
+                                            self._last_video_status_update = now
+                                            self.main_status_label.configure(text="目标检测：未检测到目标", text_color=self._get_status_color("orange"))
                                         self.video_img.set_data(frame)
 
                     return [self.video_img]
@@ -1640,7 +1779,7 @@ class HulaDroneGUI_CTk_Enhanced:
                 self.video_animation = FuncAnimation(
                     self.video_fig, 
                     update_frame, 
-                    interval=100,
+                    interval=150,
                     blit=True,
                     cache_frame_data=False
                 )
@@ -1870,6 +2009,117 @@ class HulaDroneGUI_CTk_Enhanced:
             self.video_stream_show_target_frame = False
             self.drone.flag_cam_detect = False # 与 self.drone._capture_image_loop 方法有关
 
+    def action_apply_monocular_reference(self):
+        try:
+            diameter = float(self.distance_diameter_entry.get())
+            if diameter <= 0:
+                raise ValueError()
+
+            self.drone.set_monocular_reference_size(diameter)
+            self.main_status_label.configure(
+                text=f"状态: 红色圆片直径 {diameter:.1f}cm",
+                text_color=self._get_status_color("orange"),
+            )
+            return True
+        except ValueError:
+            messagebox.showerror("输入错误", "红色圆形纸片直径必须为正数")
+            return False
+
+    def action_toggle_monocular_distance(self):
+        enable = self.monocular_distance_var.get()
+        if enable:
+            if not self.video_stream_active:
+                self.monocular_distance_var.set(False)
+                messagebox.showwarning("需要视频流", "请先开启视频流，再启动单目测距")
+                return
+            if not self.action_apply_monocular_reference():
+                self.monocular_distance_var.set(False)
+                return
+
+        self.video_stream_show_distance_frame = enable
+        self.drone.set_monocular_distance_enabled(enable)
+        status_text = "正在测距红色圆形纸片" if enable else "已停止单目视觉测距"
+        self.main_status_label.configure(
+            text=f"状态: {status_text}",
+            text_color=self._get_status_color("orange"),
+        )
+
+    def action_toggle_red_circle_laser_tracking(self):
+        enable = self.red_circle_track_var.get()
+        if enable:
+            if not self.video_stream_active:
+                self.red_circle_track_var.set(False)
+                messagebox.showwarning("需要视频流", "请先开启视频流，再启动红圆激光跟踪")
+                return
+            if not self.action_apply_monocular_reference():
+                self.red_circle_track_var.set(False)
+                return
+            if not self.action_apply_red_circle_laser_offset():
+                self.red_circle_track_var.set(False)
+                return
+
+            self.monocular_distance_var.set(True)
+            self.video_stream_show_distance_frame = True
+            self.drone.set_monocular_distance_enabled(True)
+            self.laser_var.set(False)
+
+        success = self.drone.set_red_circle_laser_tracking_enabled(enable)
+        if not success:
+            self.red_circle_track_var.set(False)
+            return
+
+        self.red_circle_laser_tracking = enable
+        status_text = "正在红圆激光跟踪" if enable else "已停止红圆激光跟踪"
+        self.main_status_label.configure(
+            text=f"状态: {status_text}",
+            text_color=self._get_status_color("orange"),
+        )
+
+    def action_toggle_red_circle_centering(self):
+        enable = self.red_circle_center_var.get()
+        if enable:
+            if not self.video_stream_active:
+                self.red_circle_center_var.set(False)
+                messagebox.showwarning("需要视频流", "请先开启视频流，再启动红圆自动居中")
+                return
+            if not self.drone.status.get("takeoff", False):
+                self.red_circle_center_var.set(False)
+                messagebox.showwarning("需要起飞", "红圆自动居中会移动无人机，请先确认安全并起飞")
+                return
+            if not self.action_apply_monocular_reference():
+                self.red_circle_center_var.set(False)
+                return
+
+            self.monocular_distance_var.set(True)
+            self.video_stream_show_distance_frame = True
+            self.drone.set_monocular_distance_enabled(True)
+
+        success = self.drone.set_red_circle_centering_enabled(enable)
+        if not success:
+            self.red_circle_center_var.set(False)
+            return
+
+        self.red_circle_centering = enable
+        status_text = "正在红圆自动居中" if enable else "已停止红圆自动居中"
+        self.main_status_label.configure(
+            text=f"状态: {status_text}",
+            text_color=self._get_status_color("orange"),
+        )
+
+    def action_apply_red_circle_laser_offset(self):
+        try:
+            offset_x = float(self.laser_offset_x_entry.get())
+            offset_y = float(self.laser_offset_y_entry.get())
+            self.drone.set_red_circle_laser_offset(offset_x, offset_y)
+            self.main_status_label.configure(
+                text=f"状态: 激光偏移 X {offset_x:+.0f}px, Y {offset_y:+.0f}px",
+                text_color=self._get_status_color("orange"),
+            )
+            return True
+        except ValueError:
+            messagebox.showerror("输入错误", "激光偏移 X/Y 必须为数字")
+            return False
+
     def action_toggle_aim_target(self):
         if not self.laser_aim_target:
             self.main_status_label.configure(text="状态: 正在瞄准目标...", text_color=self._get_status_color("orange"))
@@ -1915,6 +2165,12 @@ class HulaDroneGUI_CTk_Enhanced:
 
     def action_toggle_laser(self):
         enable = self.laser_var.get()
+        if enable and self.red_circle_laser_tracking:
+            self.red_circle_track_var.set(False)
+            self.action_toggle_red_circle_laser_tracking()
+        if enable and self.red_circle_centering:
+            self.red_circle_center_var.set(False)
+            self.action_toggle_red_circle_centering()
         action_text = "启用" if enable else "禁用"
         self.main_status_label.configure(text=f"状态: {action_text} 激光...", text_color=self._get_status_color("orange"))
         self._run_drone_action_in_thread(self.drone.toggle_laser, enable)
@@ -1945,9 +2201,22 @@ class HulaDroneGUI_CTk_Enhanced:
     def update_status_display_from_callback(self, drone_status: dict):
         if not self.gui_active or self.cleanup_in_progress: 
             return
-        # Use tracked callback
-        self._schedule_callback(0, self._do_update_ui, drone_status)
+        self._pending_status_update = drone_status.copy()
+        if self._status_update_after_id is None:
+            self._status_update_after_id = self._schedule_callback(
+                self._status_update_interval_ms,
+                self._flush_status_update,
+            )
 
+
+    def _flush_status_update(self):
+        if self._status_update_after_id in self.scheduled_callbacks:
+            self.scheduled_callbacks.remove(self._status_update_after_id)
+        self._status_update_after_id = None
+        drone_status = self._pending_status_update
+        self._pending_status_update = None
+        if drone_status is not None:
+            self._do_update_ui(drone_status)
 
     def _do_update_ui(self, drone_status: dict):
         if not self.gui_active or self.cleanup_in_progress: 
@@ -2049,6 +2318,8 @@ class HulaDroneGUI_CTk_Enhanced:
             self.cleanup_in_progress = True
             self.gui_active = False
             self.video_stream_active = False
+            self.red_circle_centering = False
+            self.red_circle_laser_tracking = False
             
             # Stop video stream first
             self.stop_video_stream()
