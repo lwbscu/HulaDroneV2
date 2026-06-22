@@ -24,6 +24,9 @@ class HulaDrone:
             "heading": "未知",
             "location": ["未知", "未知"], # x, y
             "height": "未知",      # z
+            "speed_level": 0,
+            "speed_multiplier": 1.0,
+            "speed_label": "默认速度",
             "message": "等待连接..." # 可以用于显示一般信息
         }
         self.controller: Optional[Controller] = None
@@ -63,8 +66,38 @@ class HulaDrone:
         self.red_circle_laser_offset_x_px = 0.0
         self.red_circle_laser_offset_y_px = 0.0
         self._connect_lock = threading.Lock()
+        self.speed_level = 0
+        self.speed_multiplier = 1.0
 
         self._status_callbacks = [] # 列表，用于存储注册的回调函数
+
+    def _speed_label_for_level(self, level: int) -> str:
+        labels = {
+            -3: "慢三档",
+            -2: "慢二档",
+            -1: "慢一档",
+             0: "默认速度",
+             1: "快一档",
+             2: "快二档",
+        }
+        return labels.get(level, "默认速度")
+
+    def set_speed_level(self, level: int):
+        level = max(-3, min(2, int(level)))
+        self.speed_level = level
+        if self.controller is not None:
+            self.speed_multiplier = self.controller.set_speed_level(level)
+        else:
+            speed_table = {-3: 0.45, -2: 0.60, -1: 0.80, 0: 1.00, 1: 1.20, 2: 1.40}
+            self.speed_multiplier = speed_table[level]
+
+        speed_label = self._speed_label_for_level(level)
+        self.status["speed_level"] = level
+        self.status["speed_multiplier"] = self.speed_multiplier
+        self.status["speed_label"] = speed_label
+        self.status["message"] = f"速度限制已设置为{speed_label} ({self.speed_multiplier:.2f}x)"
+        self._notify_status_callbacks()
+        return level, self.speed_multiplier
 
     def set_monocular_distance_enabled(self, enabled: bool):
         """开启或关闭单目视觉测距叠加。"""
@@ -321,7 +354,12 @@ class HulaDrone:
                     pid_x=PidCalculator(kp=0.6, ki=0.2, kd=0.05, integral_min=-20, integral_max=20),
                     pid_y=PidCalculator(kp=0.6, ki=0.2, kd=0.05, integral_min=-20, integral_max=20),
                     pid_z=PidCalculator(kp=0.6, ki=0.1, kd=0.05, integral_min=-20, integral_max=20),
+                    speed_level=self.speed_level,
                 )
+                self.speed_multiplier = self.controller.set_speed_level(self.speed_level)
+                self.status["speed_level"] = self.speed_level
+                self.status["speed_multiplier"] = self.speed_multiplier
+                self.status["speed_label"] = self._speed_label_for_level(self.speed_level)
                 self._control_thread = threading.Thread(target=self.controller.control_loop, daemon=True) # 创建控制线程
 
                 self._notify_status_callbacks()
@@ -1329,6 +1367,41 @@ class HulaDrone:
             self._notify_status_callbacks()
             return
         
+    def stop_image_stream(self):
+        self.flag_cam_detect = False
+        self.flag_monocular_distance = False
+        self.flag_red_circle_laser_track = False
+        self._red_circle_track_ready = False
+        self._red_circle_hit_confirm_count = 0
+        self._red_circle_track_event.set()
+        self._set_red_circle_laser(False, force=True)
+
+        if not self.status.get("cam_stream", False):
+            self.status["message"] = "视频流已经关闭"
+            self._notify_status_callbacks()
+            return
+
+        self.status["cam_stream"] = False
+        self._cam_ready = False
+
+        try:
+            if self.instance is not None:
+                self.instance.Plane_cmd_swith_rtp(1)
+        except Exception as e:
+            print(f"关闭视频流命令失败: {e}")
+
+        if self._cam_thread and self._cam_thread.is_alive():
+            self._cam_thread.join(timeout=1.0)
+            if self._cam_thread.is_alive():
+                print("警告：图像捕获线程未能及时结束。")
+        self._cam_thread = None
+
+        if self._pause_aim_event:
+            self._pause_aim_event.clear()
+
+        self.status["message"] = "视频流已关闭"
+        self._notify_status_callbacks()
+
     def start_detect_service(self):
         if not self.status["connected"]:
             self.status["message"] = "未连接，无法开启检测服务"

@@ -6,8 +6,6 @@ from datetime import datetime
 import pathlib
 import os
 import re
-from matplotlib.collections import LineCollection
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 def get_latest_json_file(journal_path : pathlib.Path):
     """Scan current directory for flight_data_YYYYMMDD_HHMM.json files and return the latest."""
@@ -81,13 +79,14 @@ def plot_flight_data(json_file=None):
     # Plot 1: 3D Trajectory
     fig1 = plt.figure(figsize=(10, 8))
     ax1 = fig1.add_subplot(111, projection='3d')
-    points = np.array([current_x, current_y, current_z]).T
-    segments = np.concatenate([points[:-1, np.newaxis], points[1:, np.newaxis]], axis=1)
-    norm = plt.Normalize(min(elapsed_time), max(elapsed_time))
-    lc = Line3DCollection(segments, cmap='viridis', norm=norm)
-    lc.set_array(np.array(elapsed_time[:-1]))
-    ax1.add_collection3d(lc)
-    fig1.colorbar(lc, ax=ax1, label='Elapsed Time (s)')
+    ax1.plot(
+        current_x,
+        current_y,
+        current_z,
+        color="#2b0057",
+        linewidth=1.5,
+        label="Actual Flight Path",
+    )
     unique_targets = np.unique(np.vstack((target_x, target_y, target_z)).T, axis=0)
     ax1.scatter(unique_targets[:, 0], unique_targets[:, 1], unique_targets[:, 2], 
                 c='r', marker='o', s=100, label='Target Locations')
