@@ -578,10 +578,10 @@ class HulaDroneGUI_CTk_Enhanced:
                                         alpha=0.95, label="理想轨迹")
         self.path_glow, = self.ax.plot([], [], [], linewidth=0.0, color="#0077ff",
                                        alpha=0.0, solid_capstyle="round")
-        self.path_line, = self.ax.plot([], [], [], linewidth=2.2, color="#32105f",
+        self.path_line, = self.ax.plot([], [], [], linewidth=2.2, color="#2b0057",
                                        alpha=0.98, solid_capstyle="round", label="实际轨迹")
-        self.path_points = self.ax.scatter([], [], [], s=0, color="#f8ffff",
-                                           edgecolors="#00d4ff", linewidths=0.0,
+        self.path_points = self.ax.scatter([], [], [], s=0, color="#2b0057",
+                                           edgecolors="#2b0057", linewidths=0.0,
                                            depthshade=False, label="轨迹采样点")
         self.current_pos, = self.ax.plot([], [], [], marker="o", markersize=0, color="#00d8ff",
                                          markeredgecolor="#ffffff", markeredgewidth=0.0,
