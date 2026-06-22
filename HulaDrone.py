@@ -36,22 +36,29 @@ class HulaDrone:
         self._cam_thread: Optional[threading.Thread] = None # 将在图像流捕获时创建
         self._aim_thread: Optional[threading.Thread] = None # 将在TargetDetectorAruco实例化后（见start_image_stream）创建
         self._red_circle_track_thread: Optional[threading.Thread] = None
+        self._red_circle_center_thread: Optional[threading.Thread] = None
         self.flag_cam_detect = False # 用于标记是否开启了目标检测（见_capture_image_loop）
         self.flag_monocular_distance = False # 用于标记是否开启单目视觉测距
         self.flag_red_circle_laser_track = False
+        self.flag_red_circle_centering = False
 
         self._query_ready: bool = False
         self._cam_ready: bool = False
         self._aim_ready: bool = False # 激光瞄准状态
         self._red_circle_track_ready: bool = True
+        self._red_circle_center_ready: bool = True
         self._pause_aim_event = threading.Event() # 用于控制激光瞄准的暂停（clear）和恢复（set）
         self._red_circle_track_event = threading.Event()
         self._red_circle_track_event.clear()
+        self._red_circle_center_event = threading.Event()
+        self._red_circle_center_event.clear()
         self._aim_adjust_lock = threading.Lock()
         self._red_circle_adjust_lock = threading.Lock()
+        self._red_circle_center_lock = threading.Lock()
         self.aim_pitch_offset_degrees = -2.0
         self._red_circle_laser_is_on = False
         self._red_circle_last_adjust_time = 0.0
+        self._red_circle_last_center_time = 0.0
         self._red_circle_hit_confirm_count = 0
         self.red_circle_laser_offset_x_px = 0.0
         self.red_circle_laser_offset_y_px = 0.0
@@ -103,6 +110,43 @@ class HulaDrone:
             self._red_circle_track_event.clear()
             self._set_red_circle_laser(False, force=True)
             self.status["message"] = "红圆激光跟踪已关闭"
+
+        self._notify_status_callbacks()
+        return True
+
+    def set_red_circle_centering_enabled(self, enabled: bool):
+        """Enable or disable automatic red circle centering in the video frame."""
+        if enabled:
+            if not self.status["connected"]:
+                self.status["message"] = "未连接，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if not self.status["cam_stream"]:
+                self.status["message"] = "未开启视频流，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if not self.status.get("takeoff", False):
+                self.status["message"] = "未起飞，无法开启红圆自动居中"
+                self._notify_status_callbacks()
+                return False
+            if self.distance_estimator is None:
+                self.distance_estimator = MonocularDistanceEstimator()
+
+            self.flag_monocular_distance = True
+            self.flag_red_circle_centering = True
+            if not self._red_circle_center_thread or not self._red_circle_center_thread.is_alive():
+                self._red_circle_center_ready = True
+                self._red_circle_center_thread = threading.Thread(
+                    target=self._red_circle_center_loop,
+                    daemon=True,
+                )
+                self._red_circle_center_thread.start()
+            self._red_circle_center_event.set()
+            self.status["message"] = "红圆自动居中已开启"
+        else:
+            self.flag_red_circle_centering = False
+            self._red_circle_center_event.clear()
+            self.status["message"] = "红圆自动居中已关闭"
 
         self._notify_status_callbacks()
         return True
@@ -1072,6 +1116,89 @@ class HulaDrone:
                     break
             time.sleep(0.3)
 
+    def _red_circle_center_loop(self):
+        while self._red_circle_center_ready:
+            self._red_circle_center_event.wait()
+            if not self.flag_red_circle_centering:
+                time.sleep(0.2)
+                continue
+
+            if (
+                not self.status["connected"]
+                or not self.status["cam_stream"]
+                or not self.status.get("takeoff", False)
+            ):
+                time.sleep(0.5)
+                continue
+
+            estimator = self.distance_estimator
+            if estimator is None:
+                time.sleep(0.2)
+                continue
+
+            info = estimator.current_distance_info or {}
+            if not info.get("detected"):
+                self.status["message"] = "红圆自动居中：未检测到红色圆片"
+                self._notify_status_callbacks()
+                time.sleep(0.3)
+                continue
+
+            frame_center = info.get("frame_center")
+            target_center = info.get("center")
+            if not frame_center or not target_center:
+                time.sleep(0.2)
+                continue
+
+            frame_center_x, frame_center_y = frame_center
+            target_x, target_y = target_center
+            offset_x_px = float(target_x) - float(frame_center_x)
+            offset_y_px = float(target_y) - float(frame_center_y)
+            frame_half_width = max(1.0, float(frame_center_x))
+            frame_half_height = max(1.0, float(frame_center_y))
+            offset_x_ratio = offset_x_px / frame_half_width
+            offset_y_ratio = offset_y_px / frame_half_height
+            radius_px = max(1.0, float(info.get("radius_px", 1.0)))
+            center_tolerance_px = max(14.0, min(42.0, radius_px * 0.35))
+
+            now = time.time()
+            if now - self._red_circle_last_center_time < 0.8:
+                time.sleep(0.1)
+                continue
+
+            lateral_step_cm = 0
+            pitch_step = 0
+            if abs(offset_x_px) > center_tolerance_px:
+                lateral_step_cm = max(-12, min(12, int(round(offset_x_ratio * 18))))
+            if abs(offset_y_px) > center_tolerance_px:
+                pitch_step = max(-3, min(3, int(round(-offset_y_ratio * 7))))
+
+            if lateral_step_cm == 0 and pitch_step == 0:
+                self.status["message"] = "红圆自动居中：红色圆片已在画面中心"
+                self._notify_status_callbacks()
+                time.sleep(0.2)
+                continue
+
+            try:
+                with self._red_circle_center_lock:
+                    self._set_red_circle_laser(False)
+
+                    if pitch_step != 0:
+                        self.set_camera_relative_pitch(pitch_step)
+
+                    if lateral_step_cm != 0:
+                        self.move_to_local_target(lateral_step_cm, 0, 0)
+
+                    self._red_circle_last_center_time = time.time()
+                    self.status["message"] = (
+                        "红圆自动居中："
+                        f"左右 {lateral_step_cm:+d}cm，俯仰 {pitch_step:+d}°"
+                    )
+                    self._notify_status_callbacks()
+            except Exception as e:
+                print(f"红圆自动居中调整失败: {e}")
+
+            time.sleep(0.1)
+
     def _red_circle_laser_track_loop(self):
         while self._red_circle_track_ready:
             self._red_circle_track_event.wait()
@@ -1232,8 +1359,11 @@ class HulaDrone:
         self._notify_status_callbacks()
 
         self.flag_red_circle_laser_track = False
+        self.flag_red_circle_centering = False
         self._red_circle_track_ready = False
+        self._red_circle_center_ready = False
         self._red_circle_track_event.set()
+        self._red_circle_center_event.set()
         self._set_red_circle_laser(False, force=True)
 
         # 确保清理飞行计划
@@ -1290,6 +1420,12 @@ class HulaDrone:
         # SDK 是否有显式的断开连接方法？
         # if hasattr(self.instance, 'disconnect'):
         # self.instance.disconnect()
+
+        if self._red_circle_center_thread and self._red_circle_center_thread.is_alive():
+            print("等待红圆自动居中线程结束...")
+            self._red_circle_center_thread.join(timeout=1.0)
+            if self._red_circle_center_thread.is_alive():
+                print("警告：红圆自动居中线程未能及时结束。")
 
         self.status["connected"] = False
         self.status["message"] = "已安全退出并断开连接。"

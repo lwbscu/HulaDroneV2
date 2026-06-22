@@ -88,6 +88,7 @@ class HulaDroneGUI_CTk_Enhanced:
         self.video_stream_show_distance_frame = False # 是否在视频流中显示单目测距结果
         self.laser_aim_target = False # 激光是否瞄准目标
         self.red_circle_laser_tracking = False
+        self.red_circle_centering = False
         self.image_raw_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.image_update_queue = queue.Queue(maxsize=1)  # 只保存最新图像帧
         self.frame_queue = queue.Queue(maxsize=1)  # 只保存最新检测帧
@@ -1502,8 +1503,24 @@ class HulaDroneGUI_CTk_Enhanced:
         )
         self.red_circle_track_label.grid(row=2, column=1, padx=(0, self.padding), pady=(0, self.padding), sticky="ew")
 
+        self.red_circle_center_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            frame, text="红圆自动居中", variable=self.red_circle_center_var,
+            command=self.action_toggle_red_circle_centering,
+            onvalue=True, offvalue=False, font=self.font_main,
+            corner_radius=self.corner_radius, border_width=2
+        ).grid(row=3, column=0, padx=self.padding, pady=(0, self.padding), sticky="w")
+
+        self.red_circle_center_label = ctk.CTkLabel(
+            frame,
+            text="起飞后用左右平移和相机俯仰居中红圆",
+            font=self.font_small,
+            anchor="w"
+        )
+        self.red_circle_center_label.grid(row=3, column=1, padx=(0, self.padding), pady=(0, self.padding), sticky="ew")
+
         offset_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        offset_frame.grid(row=3, column=0, columnspan=2, padx=self.padding, pady=(0, self.padding), sticky="ew")
+        offset_frame.grid(row=4, column=0, columnspan=2, padx=self.padding, pady=(0, self.padding), sticky="ew")
         offset_frame.grid_columnconfigure((1, 3), weight=1)
 
         ctk.CTkLabel(offset_frame, text="激光偏移X(px)", font=self.font_small).grid(row=0, column=0, padx=(0, 5), sticky="e")
@@ -2058,6 +2075,37 @@ class HulaDroneGUI_CTk_Enhanced:
             text_color=self._get_status_color("orange"),
         )
 
+    def action_toggle_red_circle_centering(self):
+        enable = self.red_circle_center_var.get()
+        if enable:
+            if not self.video_stream_active:
+                self.red_circle_center_var.set(False)
+                messagebox.showwarning("需要视频流", "请先开启视频流，再启动红圆自动居中")
+                return
+            if not self.drone.status.get("takeoff", False):
+                self.red_circle_center_var.set(False)
+                messagebox.showwarning("需要起飞", "红圆自动居中会移动无人机，请先确认安全并起飞")
+                return
+            if not self.action_apply_monocular_reference():
+                self.red_circle_center_var.set(False)
+                return
+
+            self.monocular_distance_var.set(True)
+            self.video_stream_show_distance_frame = True
+            self.drone.set_monocular_distance_enabled(True)
+
+        success = self.drone.set_red_circle_centering_enabled(enable)
+        if not success:
+            self.red_circle_center_var.set(False)
+            return
+
+        self.red_circle_centering = enable
+        status_text = "正在红圆自动居中" if enable else "已停止红圆自动居中"
+        self.main_status_label.configure(
+            text=f"状态: {status_text}",
+            text_color=self._get_status_color("orange"),
+        )
+
     def action_apply_red_circle_laser_offset(self):
         try:
             offset_x = float(self.laser_offset_x_entry.get())
@@ -2120,6 +2168,9 @@ class HulaDroneGUI_CTk_Enhanced:
         if enable and self.red_circle_laser_tracking:
             self.red_circle_track_var.set(False)
             self.action_toggle_red_circle_laser_tracking()
+        if enable and self.red_circle_centering:
+            self.red_circle_center_var.set(False)
+            self.action_toggle_red_circle_centering()
         action_text = "启用" if enable else "禁用"
         self.main_status_label.configure(text=f"状态: {action_text} 激光...", text_color=self._get_status_color("orange"))
         self._run_drone_action_in_thread(self.drone.toggle_laser, enable)
@@ -2267,6 +2318,8 @@ class HulaDroneGUI_CTk_Enhanced:
             self.cleanup_in_progress = True
             self.gui_active = False
             self.video_stream_active = False
+            self.red_circle_centering = False
+            self.red_circle_laser_tracking = False
             
             # Stop video stream first
             self.stop_video_stream()
